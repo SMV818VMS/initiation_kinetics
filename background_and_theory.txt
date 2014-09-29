@@ -1,0 +1,85 @@
+* a plasmid is negatively supercoiled, which means that there are fewer turns
+  than in a neutral 'lax' plasmid. Exists theory that organisms that live in
+  high heat have positively supercoiled DNA to avoid spontaneus melting.
+
+* DNA/DNA RNA/DNA parameters that you have have been extracted for short
+  duplexes so there is no consideration of the energy involved in unwinding a
+  region on a plasmid, which may be different from melting a 12-bp duplex
+  These parameters were not obtained under stress. Wang and Pettitt 2014 seem
+  to to do this for DNA/DNA, which is what you need. THey make a model A and a
+  model B, which is an extension of model A with an adjustment term which
+  improves correlation. This seems to be what you need to go for!!
+
+* Torsional stress == + or - supercoil stress
+
+* There is other work too: Exact method ... Benham 1999.
+
+* Wait a minute! Lilian's experiments were performed on short, ~100nt free DNA,
+  so the above stuff is not valid. Can you still come up with a better
+  description of DNA bubble energetics?
+
+* Lilian has performed experiments using supercoiled DNA, which showed reduced
+* half-life for promoter escape: more PY, in other words. This could mean that
+  the extra torsion increases promoter escape, but does not increase abortive
+  initiation by the same amount. This can be explained by a mechanism where
+  once RNAP reaches 11-12nt in length it escapes more readily than before,
+  whereas on the free DNA eascape is not triggered and transcription goes on for
+  longer, which offers more opportunity for backtracking and subsequent abort
+  ive initiation. 
+
+* readaing up on the trigger loop (also called g loop)
+
+* since Lilian's work is not done on normal underwound DNA, one option can be
+  to create an ODE model for the system, where you simplify some of the
+processes (I know you worked a lot with that before: hopefully you'll do better
+now). In order to do that you will need to formulate at least 3 questions that
+this ODE model can answer that was not answered in your first paper. To find
+those questionsk, work first with Lilian to resubmit the paper, and during this
+process take not of questions that an ODE model can answer!
+
+What can be done to write a modeling paper on the case that DNA stress is the
+cause of promoter escape and abortive initiation.
+
+This paper cannot re-use any analysis from the first paper directly.
+
+First you have to review what exactly is meant by DNA stress in
+
+* abortive initiation
+* promoter escape
+
+Who said What When.
+
+This builds your case. You construct a world in which this matters for these
+two situations. You explain the biochemical background for these processes.
+
+You can hopefully cite your other paper that shows that the 3' dinucleotide is
+most strongly correlated with productive yield; however, that there are still
+uncertainties, such as strong abortive initiation in the first 3-6 nucleotides
+that is not covered by the 3' dinucleotide theory. Also, your paper does not
+cover the mechanism of abortive initiation: this presumably happens after
+backtracking some steps. However, you might not need to consider backtracking,
+since the extruded RNA does not contribute to stability. Just evaluate the
+ensemble of scrunched states.
+
+You must first review the literature on DNA stress to see what can be used
+there. Use anything that is sequence dependent. If you cannot use anything,
+what why proceed? Whatever you find, start with the basic DNA-DNA stuff. This
+is not directly featured in your previous paper. Take into account maximum size
+of transcrtips.
+
+
+------------ Ideas 22. september ----------
+
+Your basic idea is to model the system with ODEs and test hypotheses:
+
+Scrunching stress can come into play in two ways:
+1) Increases the probability of backtracking (linearly, exponential..)
+2) ... ?
+You can implement this as sequence dependent, or as only a length-dependent
+sequence
+
+RNA-DNA stability can be increasingly stabilizing up until 10nt, and not
+contribute more to stabilization after that. This can also affect probability
+of backtracking. Can also make this sequence dependent or just length dependent.
+
+The only driver for forward movement is RNA 3' end affinity for trigger loop.

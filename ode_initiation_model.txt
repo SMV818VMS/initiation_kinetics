@@ -1,0 +1,47 @@
+Lots of ODEs. You can solve each one on one thread on your big pc for speedups
+(or remote desktop to SINTEF PC!)
+
+When writing up you can mention how you improve on previous publication.
+
+Basic system: 38 states (assumes ntp-insertion is identical in rate)
+
+2ntRNA-pre, 2ntRNA-post; 3ntRNApre, 3ntRNApost; ... etc
+
+Assume that once backtracked, cannot regain original position. This facilitates
+the next step.
+
+From ZntRNApost/pre can go to (Z-1)ZRNAbacktracked, which can again go to
+(Z-2)ZRNAbacktracked. This means that there will be (Z-1) unique backtracking
+states for each state = 38 + sum[(z-1)] for z from 3 to 20 == sum(z**2 + z).
+That's a lot of states.
+
+You should build a flexible python progamming structure for solving these ODEs
+in such a way that it is easy to make experiments. Can each experiment be a
+class instance, that can be pickled (saved to file?)? The experiment should
+contain information about its parameters and if it has been run or not, and if
+it has been run what the output from the experiment was. You should not throw
+away results. Parameters/configuration can be in a simple key-value dictionary,
+so that it is easy to add new parameters without affecting any previous
+structure.
+
+How to keep track of the different experiments? Perhaps one experiment per
+file? That way it is easy to create new / modify experiments. Each experiment
+can have its own output directory. Each experiment stores information about
+when it was run. The output directory has an ID for each run: this must match
+the ID in the experiment-file for the last output, otherwise the experiment
+should be run again.
+
+Also include a testing-mode, where output is saved to a common 'testing'
+directory for quick access, parameter estimation, and plotting. This is a bit
+cumbersome but since it will take a long time between each time you get to work
+on this it could be an advantage.
+
+Possible experiments are:
+
+* With and without RNA-stabilizer effect on abortive initiation
+* With and without DNA-bubble effect on abortive initiation
+* Backtracking from either translocation state
+
+Proposal: start with a pilot model: this model has 5 states; backtracking can
+occur from all states, and abortive release from the last two states.
+Experiment with this model to figure out all the implementation details.
