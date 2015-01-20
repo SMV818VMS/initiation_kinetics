@@ -1,32 +1,3 @@
-* a plasmid is negatively supercoiled, which means that there are fewer turns
-  than in a neutral 'lax' plasmid. Exists theory that organisms that live in
-  high heat have positively supercoiled DNA to avoid spontaneus melting.
-
-* DNA/DNA RNA/DNA parameters that you have have been extracted for short
-  duplexes so there is no consideration of the energy involved in unwinding a
-  region on a plasmid, which may be different from melting a 12-bp duplex
-  These parameters were not obtained under stress. Wang and Pettitt 2014 seem
-  to to do this for DNA/DNA, which is what you need. THey make a model A and a
-  model B, which is an extension of model A with an adjustment term which
-  improves correlation. This seems to be what you need to go for!!
-
-* Torsional stress == + or - supercoil stress
-
-* There is other work too: Exact method ... Benham 1999.
-
-* Wait a minute! Lilian's experiments were performed on short, ~100nt free DNA,
-  so the above stuff is not valid. Can you still come up with a better
-  description of DNA bubble energetics?
-
-* Lilian has performed experiments using supercoiled DNA, which showed reduced
-* half-life for promoter escape: more PY, in other words. This could mean that
-  the extra torsion increases promoter escape, but does not increase abortive
-  initiation by the same amount. This can be explained by a mechanism where
-  once RNAP reaches 11-12nt in length it escapes more readily than before,
-  whereas on the free DNA eascape is not triggered and transcription goes on for
-  longer, which offers more opportunity for backtracking and subsequent abort
-  ive initiation. 
-
 * readaing up on the trigger loop (also called g loop)
 
 * since Lilian's work is not done on normal underwound DNA, one option can be
@@ -35,7 +6,7 @@ processes (I know you worked a lot with that before: hopefully you'll do better
 now). In order to do that you will need to formulate at least 3 questions that
 this ODE model can answer that was not answered in your first paper. To find
 those questionsk, work first with Lilian to resubmit the paper, and during this
-process take not of questions that an ODE model can answer!
+process take note of questions that an ODE model can answer!
 
 What can be done to write a modeling paper on the case that DNA stress is the
 cause of promoter escape and abortive initiation.
@@ -67,19 +38,27 @@ what why proceed? Whatever you find, start with the basic DNA-DNA stuff. This
 is not directly featured in your previous paper. Take into account maximum size
 of transcrtips.
 
-
 ------------ Ideas 22. september ----------
 
-Your basic idea is to model the system with ODEs and test hypotheses:
+(Can justify that scrunching can be considered a force that increases
+backtracking: studies have been performed in this direction)
+Sequence or length dependence of scrunched complex on backtracking.
+1) Length dependent contribution of scrunching to backtracking rate: linear vs exponential
+2) Sequence dependent contribution of scrunching (DNADNA) to backtracking rate
 
-Scrunching stress can come into play in two ways:
-1) Increases the probability of backtracking (linearly, exponential..)
-2) ... ?
-You can implement this as sequence dependent, or as only a length-dependent
-sequence
+3) Sequence dependent or length dependent RNA-DNA stability on abortive
+initiation
+
+4) (Assumes you only do Msat in paper1) Go beyond Msat to see if that
+matters/improves results.
 
 RNA-DNA stability can be increasingly stabilizing up until 10nt, and not
 contribute more to stabilization after that. This can also affect probability
 of backtracking. Can also make this sequence dependent or just length dependent.
 
 The only driver for forward movement is RNA 3' end affinity for trigger loop.
+
+---------- Progress 29. september -------------
+
+You have added all the parameter rates; it's now time to move on to start
+setting up the reaction matrix in a flexible way.
