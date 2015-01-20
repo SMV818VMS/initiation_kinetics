@@ -52,14 +52,16 @@ Parameters (are sequence dependent and vary for each ITS):
     Some of these can be reduced to be the same constant, such as the
     nucleotide incorporation rates. But it's good to keep the option open.
 
-* N forward translocation:  kNf
-* N backward translocation: kNb
-* LPAR direct-abort (eg. 2nt to 5nt): A2, ..., A5
-* N nucleotide incorporation rates: I2, ..., IN
-* N-FP initial backtracking rates: B3, B4, ..., BN
+#* N forward translocation:  kNf
+#* N backward translocation: kNb
+#* LPAR direct-abort (eg. 2nt to 5nt): A2, ..., A5
+#* N nucleotide incorporation rates: I2, ..., IN
+#* N-FP initial backtracking rates: B3, B4, ..., BN
 * 1 escape rate
-* (N-1) + (N-2) + (N-3) + ... + FP+1 backtrack rates
-* N * LPAR from-backtracked-state-abort rates:
+#* (N-1) + (N-2) + (N-3) + ... + FP+1 backtrack rates
+#* N * LPAR from-backtracked-state-abort rates:
+
+    (# indicates those you have implemented)
 
 ----------------------------------------------------
 
