@@ -19,7 +19,7 @@ We don't have to answer these questions if we assume that [NTP] will not be
 rate-limiting for the experiment.
 
 But can we answer this question? How much is the abortive abundance
-"overrepresnted"? We can assume that after promoter escape, it takes so and so
+"overrepresented"? We can assume that after promoter escape, it takes so and so
 much time before a full length transcript is produced. This is the expected
 time to transcribe (including pauses), plus a pause toward the end (also
 something about this in Lilian's 2009 review). In Lilian's studies we have no
