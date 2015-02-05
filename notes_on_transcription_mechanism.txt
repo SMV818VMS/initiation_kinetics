@@ -78,6 +78,7 @@ affected by affinity of TL for 3' end.
 * In Hsu 2003 it is shown that the abortive but NOT the productive rate
   increases with increasing [NTP]. How do you explain that given your model
   formulation?
+
     FL depends also on incorporation after promoter escape, but should be rate
 limited by abortive initiation. We see more abortive initiation, but the same
 productive rate. I have no answer. Misincorporation induces backtracking, is
@@ -95,3 +96,33 @@ there anything there?
 * Sydow and Kramer 2009: on misincorporation, the bad nucleotide is frayed;
 * fraying prevents ntp addition, pauses RNAP, and facilitates backtracking
   because of reduced RNA-DNA hybrid length??
+
+* Here is some thinking for you: the rate of pauses and backtracking can be
+  found from single-molecule studies (several by Landick)
+
+* It's popular now to use the non-equilibrum approach, so do that of course. 
+  First try to find an overall balance between pre-translocated and
+  post-tranlsocated rate constants, assuming two different rates for entering
+  pauses: high and low
+
+* Assuming backtracking originates from a paused state, give some kind of
+  estimate of how much RNAP spends in the paused state during abortive cycling
+  (some help from Margeat?) Margeat indicates little time is spent with +1, +2,
+  +3, +4 RNA, so assume rapid translocation up to here (but of course, there is
+   abortive initiation here too, a lot in a way)
+* You have a big picture to fit: the general abortive pattern
+
+* Then try to see if this 
+
+* Can you estimate the rate of entering into a pause and comparing
+* this to elongation studies?
+
+* There are several possibilities for where the effect of scrunching comes in.
+    - One is by affecting the translocation rates directly
+        - which in turn will affect - not the rate, but - how often a paused
+          state is entered
+    - Another is by affecting the rate of entering pauses
+    - A third is to affect the rate of escaping from pauses
+
+* For the sigma-effect, model as a decrease in forward translocation rate
+
