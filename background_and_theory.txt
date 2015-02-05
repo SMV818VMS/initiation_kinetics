@@ -1,56 +1,24 @@
-* readaing up on the trigger loop (also called g loop)
-
-* since Lilian's work is not done on normal underwound DNA, one option can be
-  to create an ODE model for the system, where you simplify some of the
-processes (I know you worked a lot with that before: hopefully you'll do better
-now). In order to do that you will need to formulate at least 3 questions that
-this ODE model can answer that was not answered in your first paper. To find
-those questionsk, work first with Lilian to resubmit the paper, and during this
-process take note of questions that an ODE model can answer!
-
-What can be done to write a modeling paper on the case that DNA stress is the
-cause of promoter escape and abortive initiation.
-
-This paper cannot re-use any analysis from the first paper directly.
-
-First you have to review what exactly is meant by DNA stress in
-
-* abortive initiation
-* promoter escape
-
-Who said What When.
-
-This builds your case. You construct a world in which this matters for these
-two situations. You explain the biochemical background for these processes.
-
-You can hopefully cite your other paper that shows that the 3' dinucleotide is
-most strongly correlated with productive yield; however, that there are still
-uncertainties, such as strong abortive initiation in the first 3-6 nucleotides
-that is not covered by the 3' dinucleotide theory. Also, your paper does not
-cover the mechanism of abortive initiation: this presumably happens after
-backtracking some steps. However, you might not need to consider backtracking,
-since the extruded RNA does not contribute to stability. Just evaluate the
-ensemble of scrunched states.
-
-You must first review the literature on DNA stress to see what can be used
-there. Use anything that is sequence dependent. If you cannot use anything,
-what why proceed? Whatever you find, start with the basic DNA-DNA stuff. This
-is not directly featured in your previous paper. Take into account maximum size
-of transcrtips.
-
------------- Ideas 22. september ----------
-
 (Can justify that scrunching can be considered a force that increases
 backtracking: studies have been performed in this direction)
 Sequence or length dependence of scrunched complex on backtracking.
+
 1) Length dependent contribution of scrunching to backtracking rate: linear vs exponential
+
 2) Sequence dependent contribution of scrunching (DNADNA) to backtracking rate
 
 3) Sequence dependent or length dependent RNA-DNA stability on abortive
-initiation
+   initiation
 
 4) (Assumes you only do Msat in paper1) Go beyond Msat to see if that
 matters/improves results.
+
+5) Using Malinen's rate constants? Can work under the assumption that
+translocation and everything occurs as before, but the ONLY thing that changes
+yes the ONLY (to keep it simple) is the probability to further backtrack from a
+paused state. This will probably not work!! Then, we can show that by
+increasing the probability of pausing itself, we get better results.
+
+ -- or do we need to increase the probability of pausing.
 
 RNA-DNA stability can be increasingly stabilizing up until 10nt, and not
 contribute more to stabilization after that. This can also affect probability
@@ -58,7 +26,48 @@ of backtracking. Can also make this sequence dependent or just length dependent.
 
 The only driver for forward movement is RNA 3' end affinity for trigger loop.
 
----------- Progress 29. september -------------
 
-You have added all the parameter rates; it's now time to move on to start
-setting up the reaction matrix in a flexible way.
+SCOPE OF PAPER:
+
+So there are 4 "big" parts to this:
+
+0) Discuss that best correlation is with A, second-best with G, and that G is
+counter to the sparsely documented 'pausing happens more on G' (Zhang 2014,
+structural basis, etc)
+
+1) Base case: assume stabilizing effect of RNA-DNA by free energy; assume no
+effect of DNA-DNA energy. Just a simplified model that evaluates the kinetics
+of initiation vs elongation. The important point is to find out where the time
+limiting step occurs. Assume a constant backtracking rate of /s something and
+release at 1 nt (to keep it simple).
+
+1) Evaluate with rate constants "as if during elongation", with pause frequency
+    "as if during elongation" -- this does not work; propose 3 "fixes"
+    - enhanced reverse translocation
+    - reduced forward translocation
+    - increased entry to paused state
+
+Step 1) Establishes a more or less descriptive model of initial transcription
+that can be used to test hypotheses.
+
+2) RNA-DNA energy: you have the karissamova 2014 who say that it can contribute
+to transcription initiation stuff, and you have the structural basis who say
+that it's all RNA-protein. We cannot test RNA-protein, but we can test RNA-DNA
+versus a length-dependent stability, where stability increases until full
+hybrid length. What does it tell us? [Is backtracking slower after a full
+RNA-DNA hybrid is formed? -- do we get a speedup with each fewer duplex basepair?]
+
+3) DNA-DNA energy. We have determined that entry to paused state is necessarily
+increased during initiation. By just increasing the frequency we did well. Can
+we do better? What if we make it a function of scrunched DNA length? See
+result.
+
+4) So far, assumed that all promoters achieve escape at +13, when most abortive
+synthesis is complete. What happens if we attempt to use the MSATs? Does that
+improve on the situation?
+
+Conclusions: the conclusions from 1-4, or a subset of these.
+
+BASIC ASSUMPTIONS
+
+* [NTP] is not significantly affecting the result.
