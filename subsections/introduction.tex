@@ -3,13 +3,31 @@ Introduction
 First study looked on average translocation coefficients. Does not capture
 dynamic effects.
 
+Many models sequence inspecific -- we need sequence specific model.
+
 Questions we'd like to ask:
 
 * Can we reproduce the abortive patterns from Hsu et al.?
 
 * Do results improve when taking into account the steric clash at ~6nt?
     -- meaning an increase in abortive initation above what is predicted by
-    backtracking rate and 
+    -- steric clash reduces forward translocation rate?
+    -- DG100 and DG400 have interesting common abortive patterns for the
+    datasets as a whole up to +7 at least
+    -- You clearly see the effect of the +6 steric clash, so it would be fun
+       to incorporate it in such a way as to 
+    -- The trend is as follows High for 2-3, then low, then high for +6, then
+    low until high for 13, 14 and 15. That seems to be the general abortive
+    picture. Can you work with that?
+    -- BUT for the lower half of DG100, the difference is most clear at +13,
+    +14, and +15
+
+    -- Hypothesis. The N25 promoter has a lot of initiation; easy open complex
+    formation. The most striking part of the difference between top half and
+    lower half in DG100 is the abortive probability at +13, +14, and +15. This
+    abortive probability is affected by the propensity to pause - AND -
+    backtrack from that paused state at these positions. If we can reproduce
+    these processes, we should be able to explain PY well.
 
 * Can we estimate the ``true'' extent of abortive initiation, given that
   full-length transcripts may be lower in abundance due to stalling at the end of
@@ -24,4 +42,4 @@ Questions we'd like to ask:
 * Can we estimate the effect of the scrunched DNA bubble on the unstability?
 
 * Is the combined effect of an RNA-DNA stabilizing hybrid (sequence-specific)
-  and a scrunched bubble (sequence-inspecific) leading to improvements?
+  and a scrunched bubble (sequence-unspecific) leading to improvements?
