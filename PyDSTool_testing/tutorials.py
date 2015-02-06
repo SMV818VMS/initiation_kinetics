@@ -118,8 +118,9 @@ def basic_transcription():
 def main():
 
     #tutorial_linear()
+    #basic_transcription()
 
-    basic_transcription()
+    #transcription_with_backtracking_and_abortive_states
 
 if __name__ == '__main__':
     main()
