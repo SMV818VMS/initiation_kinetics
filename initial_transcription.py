@@ -11,7 +11,8 @@ Class iRNAP(object):
             backtracked=False,
             iplus1_site=2,
             RNADNA_duplex_length=2,
-            scrunched_DNA_size=0
+            scrunched_DNA_size=0,
+            free_5prime_RNA_length=0,
             max_duplex_length=10):
 
         # Simplified overall description of RNAP state during initial transcription
@@ -23,13 +24,14 @@ Class iRNAP(object):
         self.iplus1_site = iplus1_site
         self.RNADNA_duplex_length = RNADNA_duplex_length
         self.scrunched_DNA_size = scrunched_DNA_size
+        self.free_5prime_RNA_length = free_5prime_RNA_length
         self.__max_duplex_length = max_duplex_length
 
         self.SanityCheck()
 
     def SanityCheck():
         """
-        Internal consistency-checking. Must be called after each update of state space.
+        Internal consistency-checking of states. Must be called after each update of state.
         """
 
         if self.backtracked:
@@ -55,6 +57,14 @@ Class iRNAP(object):
         assert self.RNA_length >= self.RNADNA_duplex_length
 
         assert self.scrunched_DNA_size < self.RNA_length
+
+        assert self.free_5prime_RNA_length < self.RNA_length
+
+        if self.free_5prime_RNA_length > 0:
+            assert self.free_5prime_RNA_length = self.RNA_length - self.RNADNA_duplex_length
+
+        if self.RNADNA_duplex_length > self.__max_duplex_length:
+            assert self.free_5prime_RNA_length > 0
 
     def GetActiveSiteDinucleotide(its):
         """
@@ -88,26 +98,35 @@ Class iRNAP(object):
 
         self.SanityCheck()
 
+    def CanBackTrack():
+        self.SanityCheck()
+        return self.paused or self.backtracked
+
     def Backtrack():
         """
-        Backtrack either from a paused state, or backtrack even further from a
-        backtracked state
+        Backtrack either from a paused state, or backtrack even further from an
+        already backtracked state
         """
-        if self.paused:
-            self.backtracked = True
+        if self.CanBackTrack():
+
+            if self.paused:
+                self.paused = False
+                self.backtracked = True
 
             self.iplus1_site -= 1
             self.scrunched_DNA_size -= 1
-            # increase duplex length only until RNA reaches length 10
-            if self.RNADNA_duplex_length < self.__max_duplex_length:
-                self.RNADNA_duplex_length = RNA_length
+            # duplex length decreases by 1 if duplex is not full length
+            if self.RNADNA_duplex_length =< self.__max_duplex_length:
+                self.RNADNA_duplex_length -= 1
 
-        elif self.backtracked:
-            pass
-            # TODO backtrack further
+            # free 5' end reduced by one if it exists
+            if self.free_5prime_RNA_length > 0:
+                self.free_5prime_RNA_length -= 1
         else:
-            print('Must be paused or backtracked to backtrack!')
+            print('Was not in a state from which to backtrack!')
             1/0
+
+        self.SanityCheck()
 
     def CanGrow():
         excluded_from_growing = self.pre_translocated and self.backtracked and self.paused
@@ -121,9 +140,14 @@ Class iRNAP(object):
             self.iplus1_site += 1
             self.RNA_length += 1
             self.scrunched_DNA_size += 1
+
             # increase duplex length until RNA reaches length 10
             if self.RNA_length =< self.__max_duplex_length:
                 self.RNADNA_duplex_length = RNA_length
+
+            # when reaching a full duplex, start growing a free 5' end
+            if self.RNADNA_duplex_length == self.__max_duplex_length:
+                self.free_5prime_RNA_length += 1
         else:
             print('Must be post-translocated to grow RNA!')
             1/0
