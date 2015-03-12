@@ -1,46 +1,7 @@
 from PyDSTool import args, Generator
 #from ipdb import set_trace as debug
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-
-import brewer2mpl
-# Use brewer colors instead of default ones in matplotlib
-bmap = brewer2mpl.get_map('Set2', 'qualitative', 7)
-mpl.rcParams['axes.color_cycle'] = bmap.mpl_colors
-
-
-def tutorial_linear():
-
-    ### Setup initial conditions, parameters, and dynamical system description ###
-    initial_conditions = {'x':1, 'y':0.3}
-    parameters = {'k':0.1, 'm':0.5}
-
-    x_rhs = 'y'
-    y_rhs = '-k*x/m'
-
-    system = {'x': x_rhs, 'y': y_rhs}
-
-    ### Specify the model
-    DSargs = args()
-    DSargs.name ='Simple_harmonic_motion'
-    DSargs.ics = initial_conditions
-    DSargs.pars = parameters
-    DSargs.tdata = [0, 20]
-    DSargs.varspecs = system
-
-    # Create the solver object
-    DS = Generator.Vode_ODEsystem(DSargs)
-
-    # Can change settings afterwards using "set"
-    DS.set(pars={'k': 0.1}, ics={'x': 0.8})
-
-    traj = DS.compute('demo')
-    pts = traj.sample()
-
-    plt.plot(pts['t'], pts['x'], label='x')
-    plt.plot(pts['t'], pts['y'], label='y')
-    plt.legend()
-    plt.xlabel('t')
+plt.style.use('ggplot')
 
 
 def basic_transcription():
@@ -117,10 +78,8 @@ def basic_transcription():
 
 def main():
 
-    #tutorial_linear()
-    #basic_transcription()
+    basic_transcription()
 
-    #transcription_with_backtracking_and_abortive_states
 
 if __name__ == '__main__':
     main()
