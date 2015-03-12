@@ -92,3 +92,13 @@ Description and results
 * At least two backtracking paths: from misincorporation and from 'pause'
 * Residues contacting incoming NTP are conserved in all cellular RNA
   polymerases
+
+(Malinen, 2012)
+
+* In discussion, says that trigger loop can fold in the presence and absence of
+  an NTP in the substrate site: if NTP present, it promotes catalysis; if not
+  present, it promotes backward translocation due to affinity with the 3' end.
+  What causes the trigger loop to open once NTP has bound then? Must be PPi
+  somehow pushing it way out. And how does fraying and backtracking happen when
+  the trigger loop is there? Maybe it opens, but instead of translocating
+  forward, another reverse step happens by chance.
