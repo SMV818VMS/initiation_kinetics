@@ -3,7 +3,7 @@ Notes from "Molecular basis of transcription pausing"
 # I can't get this one
 * Pausing is favored by pyrimidines rather than purines at the growing RNA end (Chan and Landick, 1993)
 
-    # I found it hard to find that pausing is favored by guanine at the incoming
+  # I found it hard to find that pausing is favored by guanine at the incoming
       nucleotide from the article below!!!!
 * Pausing is favored particularly by guanine at the incoming nucleotide
   position (Lee, Phung, Steward, Landick 1990)
@@ -102,3 +102,18 @@ Description and results
   somehow pushing it way out. And how does fraying and backtracking happen when
   the trigger loop is there? Maybe it opens, but instead of translocating
   forward, another reverse step happens by chance.
+
+(Nudler, 1997)
+
+Backtracking can result from an unstable RNA-DNA hybrid
+Backtracking signals are AU-rich, but the stability of the 3' terminal
+hetroduplex is not everything to it due to A-tracks that do not induce
+backtracking. Backtracking revolves rewinding/unwinding of RNA-DNA and DNA-DNA,
+and as such depend on the overall sequence context.
+
+"easy to imagine that mismatched ribonucletodies that destabilize the 3'
+proximal hybrid would facilitate backtracking"
+    --- (But we now "know" that this is probably regulated by the TL)
+
+(Weixbaumer 2013)
+Nucleotide-protein interactions matter for pausing. One pause signal: +1G.
