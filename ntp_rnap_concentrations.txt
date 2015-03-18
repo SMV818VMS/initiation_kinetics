@@ -6,17 +6,29 @@ DG100 Library:
 For 2006: 60% active RNAP
 Each raction 10-20 uL contained:
 
-* 30  nM template DNA
+* 30  nM template DNA in buffer
 * 200 mM KCl (seems to have an effect on protein solubility)
-* 100 uM NTP
+* 100 uM NTP -- with [gamma-32P]-ATP added to 10 cpm/fmol
 * 50  nM RNAP
+
+Buffer:
+ - 50mM Tris-HCl at pH 8.0
+ - 10mM MgCl_2
+ - 10mM beta-mercaptoethanol
+ - 10ug/mL acetylated BSA (a cow protein)
+
+So, DNA and RNAP are outnumbered by a factor 10^6-7 with the other molecules in
+the soup. How often do they meet? When they meet, how often do they react? Etc.
+This is getting complicated.
+
 
 This means that there is 30*10^-9 DNA templates and 50 nM RNAP
 So almost 2 RNAP for each template. At 60% activity there is 30 nM functional
 RNAP, which becomes 1 RNAP per template. How many are transcribing at the same
-time? What is the kinetic competition? How often does an RNAP meet a DNA?
-We don't have to answer these questions if we assume that [NTP] will not be
-rate-limiting for the experiment.
+time? What is the kinetic competition? How often does an RNAP meet a DNA (can
+you calculate this based on the reaction volume)?  We don't have to answer
+these questions if we assume that [NTP] will not be rate-limiting for the
+experiment.
 
 But can we answer this question? How much is the abortive abundance
 "overrepresented"? We can assume that after promoter escape, it takes so and so
