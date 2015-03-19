@@ -75,7 +75,7 @@ def DuplexLength(rna_length, nr_backtracked_steps):
     return min(rna_length - nr_backtracked_steps, 10)
 
 
-def basic_transcription():
+def BasicTranscription():
     """
     Basic transcription. Start with len=0 RNA, translocate; add first
     nucleotide; repeat; promoter escape at len=2 RNA. Direct abortive release possible
@@ -209,7 +209,45 @@ def basic_transcription():
     plt.xlabel('t')
 
 
-def basic_transcription_scripted():
+def QualityCheck(backtrack_start, initial_rna_length, escape_RNA_length,
+                    abortive_range, backtrack_until):
+    """
+    Do some sanity checking to verify that the settings for creating the
+    reaction network graph is correct.
+    """
+    warnings = []
+    if backtrack_until not in abortive_range:
+        warning = 'Backtracking states exist that do not abort!'
+        warnings.append(warning)
+
+    if initial_rna_length > escape_RNA_length:
+        warning = 'Initial RNA length longer than escape length!'
+        warnings.append(warning)
+
+    if backtrack_start > escape_RNA_length:
+        warning = 'No backtracking possible!'
+        warnings.append(warning)
+
+    for warning in warnings:
+        print 'WARNING: ' + warning
+
+
+def RateConstantName(from_state, to_state):
+
+    return '_to_'.join([from_state, to_state])
+
+
+def AddAbortiveLogNode(G, abortive_log):
+    # Add the abortive log state
+    G.add_node(abortive_log)
+
+
+def AddReaction(G, rc, from_state, to_state):
+    rc_name = RateConstantName(from_state, to_state)
+    G.add_edge(from_state, to_state, rate_constant=rc, rate_constant_name=rc_name)
+
+
+def InitialTranscriptionReactionGraph(setup):
     """
     Script up an initial transcription event. Save the resulting reaction
     network as a graph with networkx.
@@ -230,26 +268,16 @@ def basic_transcription_scripted():
     Assuming backtracking and direct abortive release happens from the
     pretranslocated state
     """
+    # short form
+    allow_escape = setup['allow_escape']
+    backtrack_start = setup['backtrack_start']
+    initial_rna_length = setup['initial_rna_length']
+    escape_RNA_length = setup['escape_RNA_length']
+    abortive_range = setup['abortive_range']
+    backtrack_until_duplex_len = setup['backtrack_until_duplex_len']
 
     # Template string for state variables
     state_template = 'RNAP_{0}{1}{2}'
-
-    # RNA length where backtracking may start
-    backtrack_start = 2
-    # starting RNA length
-    initial_rna_length = 0
-    # escape RNA-length
-    escape_RNA_length = 2
-    # RNA-DNA duplex abortive range: abortive release may happen here, either by
-    # backtracking to this duplex length or directly from this duplex length
-    abort_RNA_range = (1, 5)
-    # minimal duplex length for backtracking -- may be useful for reducing the
-    # number of states. For example, backtracking to a length 1 bp hybrid may
-    # have such a low probability that it is not worth considering making 19
-    # states just to represent this option. An alternative way of not including
-    # this state is by setting the rate constant to zero for these states and
-    # testing for zero valued rate constants.
-    backtrack_stop = 1
 
     # Initialize a rates object to calculate reaction rates for a given
     # translocation state
@@ -258,12 +286,20 @@ def basic_transcription_scripted():
     # Initialize a graph object
     G = nx.DiGraph()
 
+    QualityCheck(backtrack_start, initial_rna_length, escape_RNA_length,
+            abortive_range, backtrack_until_duplex_len)
+
     # Create the first reaction step -> from open complex to starting complex
+    open_complex = state_template.format(0, 0, 0)
     if initial_rna_length > 0:
-        open_complex = state_template.format(0, 0, 0)
         starting_complex = state_template.format(initial_rna_length, 0, 0)
         first_step = R.FirstStep(initial_rna_length)
         G.add_edge(open_complex, starting_complex, rate_constant=first_step)
+    else:
+        starting_complex = open_complex
+
+    # Tag the starting complex -- and create it, if not already made
+    G.add_node(starting_complex, initial_node=True)
 
     for rna_len in range(initial_rna_length, escape_RNA_length + 1):
 
@@ -271,81 +307,189 @@ def basic_transcription_scripted():
         pre_translocated = state_template.format(rna_len, 0, 0)
         post_translocated = state_template.format(rna_len, 1, 0)
 
-        forward = R.Forward()
-        reverse = R.Reverse()
+        forward_rc = R.Forward()
+        reverse_rc = R.Reverse()
 
-        # Add translocation states by adding rate coefficients to the graph
-        G.add_edge(pre_translocated, post_translocated, rate_constant=forward)
-        G.add_edge(post_translocated, pre_translocated, rate_constant=reverse)
+        AddReaction(G, forward_rc, pre_translocated, post_translocated)
+        AddReaction(G, reverse_rc, post_translocated, pre_translocated)
 
         # If RNA length longer than 0, add nucleotide addition cycle
         if rna_len > 0:
-            nac = R.Nac()
-            previous_post_translocated = state_template.format(rna_len-1, 1, 0)
-            G.add_edge(previous_post_translocated, pre_translocated, rate_constant=nac)
 
-        # Add the abortive log state corresponding to this RNA length
-        abortive_log = state_template.format(rna_len, 'a', 'l')
-        G.add_node(abortive_log)
+            previous_post_translocated = state_template.format(rna_len-1, 1, 0)
+            nac_rc = R.Nac()
+            AddReaction(G, nac_rc, previous_post_translocated, pre_translocated)
+
+        # Add abortive log state if grown into the abortive range
+        if rna_len > abortive_range[0]:
+            abortive_log = state_template.format(rna_len, 'a', 'l')
+            AddAbortiveLogNode(G, abortive_log)
 
         # backtrack until backtrack stop
         if rna_len >= backtrack_start:
-            for nr_backtrack_steps in range(1, rna_len - backtrack_stop + 1):
-                this_backtracked_state = state_template.format(rna_len, 0,
-                        nr_backtrack_steps)
+            for nr_backtracked_steps in range(1, rna_len - backtrack_until_duplex_len + 1):
+                this_backtracked = state_template.format(rna_len, 0, nr_backtracked_steps)
 
-                # if first step, go from pre-translocated
-                if nr_backtrack_steps == 1:
-                    first_backtrack = R.Backtrack()
-                    G.add_edge(pre_translocated, this_backtracked_state,
-                            rate_constant=first_backtrack)
-                # after, go from previous backtracked state
+                # first step from pre-translocated
+                if nr_backtracked_steps == 1:
+                    first_backtrack_rc = R.Backtrack()
+                    AddReaction(G, first_backtrack_rc, pre_translocated, this_backtracked)
+
+                # subsequent from previous backtracked state
                 else:
-                    previous_backtracked_state = state_template.format(rna_len,
-                            0, nr_backtrack_steps-1)
-                    this_backtrack = R.Backtrack()
-                    G.add_edge(previous_backtracked_state,
-                            this_backtracked_state,
-                            rate_constant=this_backtrack)
+                    last_backtracked = state_template.format(rna_len, 0, nr_backtracked_steps-1)
+                    this_backtrack_rc = R.Backtrack()
+                    AddReaction(G, this_backtrack_rc, last_backtracked, this_backtracked),
 
                 # check if we have backtracked into abortive-territory!
-                if DuplexLength(rna_len, nr_backtrack_steps) in abort_RNA_range:
+                if DuplexLength(rna_len, nr_backtracked_steps) in abortive_range:
+                    abortive_rc = R.Abortive()
+                    AddReaction(G, abortive_rc, this_backtracked, open_complex)
+                    # add log
+                    AddReaction(G, abortive_rc, this_backtracked, abortive_log)
 
-                    abortive = R.Abortive()
-                    open_complex = state_template.format(0, 0, 0)
-                    G.add_edge(this_backtracked_state, open_complex, rate_constant=abortive)
-                    # Point to the abortive log state too, to keep tabs
-                    G.add_edge(this_backtracked_state, abortive_log, rate_constant=abortive)
-
-        # direct abortive release -- if within direct abortive range!
-        if rna_len in abort_RNA_range:
-            abortive = R.Abortive()
-            open_complex = state_template.format(0, 0, 0)
-            G.add_edge(pre_translocated, open_complex, rate_constant=abortive)
-            # Point to the abortive log state too, to keep tabs
-            G.add_edge(pre_translocated, abortive_log, rate_constant=abortive)
+        # direct abortive release
+        if rna_len in abortive_range:
+            abortive_rc = R.Abortive()
+            AddReaction(G, abortive_rc, pre_translocated, open_complex)
+            # add log
+            AddReaction(G, abortive_rc, pre_translocated, abortive_log)
 
         # last state that should be made
-        if rna_len == escape_RNA_length:
-            full_length = state_template.format('f', 'l', 't')
-            escape = R.ToFL()
-            G.add_edge(post_translocated, full_length, rate_constant=escape)
+        if (rna_len == escape_RNA_length):
+            if allow_escape:
+                full_length = state_template.format('f', 'l', 't')
+                escape_rc = R.ToFL()
+                AddReaction(G, escape_rc, post_translocated, full_length)
             break
 
-    nx.draw(G, with_labels=True)
-    debug()
+    return G
 
 
-def main():
+def ReactionSystemSetup():
+    """
+    Setup for the reaction system
+    """
+    setup = {}
+
+    # You can choose not to let the sytem proceed to escape
+    setup['allow_escape'] = True
+    # RNA length where backtracking may start
+    setup['backtrack_start'] = 2
+    # starting RNA length
+    setup['initial_rna_length'] = 0
+    # escape RNA-length
+    setup['escape_RNA_length'] = 2
+    # RNA-DNA duplex abortive range: abortive release may happen here, either by
+    # backtracking to this duplex length or directly from this duplex length
+    setup['abortive_range'] = range(1, 5+1)
+    # minimal duplex length for backtracking -- may be useful for reducing the
+    # number of states. For example, backtracking to a length 1 bp hybrid may
+    # have such a low probability that it is not worth considering making 19
+    # states just to represent this option. An alternative way of not including
+    # this state is by setting the rate constant to zero for these states and
+    # testing for zero valued rate constants.
+    setup['backtrack_until_duplex_len'] = 1
+
+    return setup
+
+
+def CreateReactionSystem(G):
+    """
+    Take a graph with nodes, edges, and 'rate_constant' attributes and create a
+    reaction system
+    """
+
+    system = {}
+    for from_node, to_node, data in G.edges(data=True):
+
+        # add nodes if not in system
+        if from_node not in system:
+            system[from_node] = ''
+        if to_node not in system:
+            system[to_node] = ''
+
+        # extract reaction rate constant
+        rc = data['rate_constant']
+        # add contribution to system from this connection
+        factor = '*'.join([str(rc), from_node])
+        gain = ' + ' + factor
+        loss = ' - ' + factor
+
+        system[from_node] = system[from_node] + loss
+        system[to_node] = system[to_node] + gain
+
+    return system
+
+
+def SetInitialConditions(G):
+    """
+    """
+
+    initial_found = False
+    initial_conditions = {}
+
+    for node, data in G.nodes(data=True):
+        if 'initial_node' in data:
+            if not initial_found:
+                initial_conditions[node] = 1
+                initial_found = True
+            else:
+                print('Multiple initials found!')
+                1/0
+        else:
+            initial_conditions[node] = 0
+
+    if not initial_found:
+        print('No initial nodes found')
+    else:
+        return initial_conditions
+
+
+def SolveModel(reaction_system, parameters, initial_conditions):
+    """
+    Create and solve model using PyDSTool.
+    """
+
+    ### Specify the model
+    DSargs = args()
+    DSargs.name ='Initial transcription'
+    DSargs.ics = initial_conditions
+    DSargs.pars = parameters
+    DSargs.tdata = [0, 450]
+    DSargs.varspecs = reaction_system
+
+    # Create the solver object
+    DS = Generator.Vode_ODEsystem(DSargs)
+
+    traj = DS.compute('demo')
+
+    return traj
+
+
+def Main():
 
     # 0) Hard-code the system
     # Basic, hard-coded transcription initiation.
-    #basic_transcription()
+    #BasicTranscription()
+    pass
 
     # 1) Script up the system
-    # Basic, scripted transcription initiation
-    basic_transcription_scripted()
+    # create a setup
+    reaction_setup = ReactionSystemSetup()
 
+    # create the graph
+    G = InitialTranscriptionReactionGraph(reaction_setup)
+
+    # create reaction system and initial conditions
+    reaction_system = CreateReactionSystem(G)
+    initial_conditions = SetInitialConditions(G)
+
+    trajectory = SolveModel(reaction_system, initial_conditions)
+
+    print trajectory
+
+    debug()
 
 if __name__ == '__main__':
-    main()
+    Main()
