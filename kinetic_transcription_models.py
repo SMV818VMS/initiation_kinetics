@@ -1,8 +1,12 @@
 from PyDSTool import args, Generator
 from ipdb import set_trace as debug  # NOQA
+from matplotlib.pyplot import ion
 import matplotlib.pyplot as plt
 plt.style.use('ggplot')
 import networkx as nx
+
+# Non bliocking graphics
+ion()
 
 
 class RateConstants(object):
@@ -107,10 +111,13 @@ def BasicTranscription():
     reverse = 0.1
     nac = 0.2
     to_fl = 0.7
-    abortive_from_10 = 0.3
-    abortive_from_20 = 0.2
-    backtrack_from_20_to_201 = 0.3
-    abortive_from_201 = 0.3
+    abortive = 0.2
+    backtrack = 0.3
+
+    #abortive_from_10 = 0.2
+    #abortive_from_20 = 0.2
+    #backtrack_from_20_to_201 = 0.3
+    #abortive_from_201 = 0.2
 
     # These give the releation between the states
     # All possible relevant state information should be obtainable from the
@@ -121,14 +128,14 @@ def BasicTranscription():
             'k_01_to_10':nac,
 
             'k_10_to_11':forward,
-            'k_10_to_1a':abortive_from_10,
+            'k_10_to_1a':abortive,
             'k_11_to_10':reverse,
             'k_11_to_20':nac,
 
             'k_20_to_21':forward,
-            'k_20_to_2a':abortive_from_20,
-            'k_20_to_201':backtrack_from_20_to_201,
-            'k_201_to_2a':abortive_from_201,
+            'k_20_to_2a':abortive,
+            'k_20_to_201':backtrack,
+            'k_201_to_2a':abortive,
             'k_21_to_20':reverse,
             'k_21_to_FL':to_fl,
                   }
@@ -137,18 +144,18 @@ def BasicTranscription():
     RNAP_00_rhs = 'k_01_to_00*RNAP_01 - k_00_to_01*RNAP_00 '\
                   '+ k_10_to_1a*RNAP_10 '\
                   '+ k_20_to_2a*RNAP_20 '\
-                  '+ k_201_to_2a*RNAP_20 '
+                  '+ k_201_to_2a*RNAP_201 '
 
     RNAP_01_rhs = '-k_01_to_00*RNAP_01 + k_00_to_01*RNAP_00 - k_01_to_10*RNAP_01'
 
     RNAP_10_rhs = 'k_11_to_10*RNAP_11 - k_10_to_11*RNAP_10 + k_01_to_10*RNAP_01 '\
                   '-k_10_to_1a*RNAP_10'
 
-    RNAP_11_rhs = '-k_11_to_10*RNAP_11 + k_10_to_11*RNAP_10 - k_11_to_10*RNAP_11'
+    RNAP_11_rhs = '-k_11_to_10*RNAP_11 + k_10_to_11*RNAP_10 - k_11_to_20*RNAP_11'
 
     RNAP_1al_rhs = 'k_10_to_1a*RNAP_10'
 
-    RNAP_20_rhs = 'k_21_to_20*RNAP_21 - k_20_to_21*RNAP_20 + k_11_to_10*RNAP_11 '\
+    RNAP_20_rhs = 'k_21_to_20*RNAP_21 - k_20_to_21*RNAP_20 + k_11_to_20*RNAP_11 '\
                   '-k_20_to_201*RNAP_20 - k_20_to_2a*RNAP_20'
 
     RNAP_21_rhs = '-k_21_to_20*RNAP_21 + k_20_to_21*RNAP_20 - k_21_to_FL*RNAP_21'
@@ -179,7 +186,7 @@ def BasicTranscription():
     DSargs.name ='Simple_transcription_and_escape'
     DSargs.ics = initial_conditions
     DSargs.pars = parameters
-    DSargs.tdata = [0, 450]
+    DSargs.tdata = [0, 150]
     DSargs.varspecs = system
 
     # Create the solver object
@@ -188,15 +195,18 @@ def BasicTranscription():
     traj = DS.compute('demo')
     pts = traj.sample()
 
-    plt.plot(pts['t'], pts['RNAP_00'], label='RNAP_00')
-    #plt.plot(pts['t'], pts['RNAP_01'], label='RNAP_01')
-    #plt.plot(pts['t'], pts['RNAP_10'], label='RNAP_10')
-    #plt.plot(pts['t'], pts['RNAP_20'], label='RNAP_20')
-    plt.plot(pts['t'], pts['RNAP_1al'], label='RNAP_1a')
-    plt.plot(pts['t'], pts['RNAP_2al'], label='RNAP_2a')
-    plt.plot(pts['t'], pts['RNAP_FL'], label='RNAP_FL')
-    plt.legend()
-    plt.xlabel('t')
+    fig, ax = plt.subplots()
+
+    ax.plot(pts['t'], pts['RNAP_00'], label='RNAP_00')
+    ax.plot(pts['t'], pts['RNAP_10'], label='RNAP_10')
+    ax.plot(pts['t'], pts['RNAP_20'], label='RNAP_20')
+    ax.plot(pts['t'], pts['RNAP_1al'], label='RNAP_1a')
+    ax.plot(pts['t'], pts['RNAP_2al'], label='RNAP_2a')
+    ax.plot(pts['t'], pts['RNAP_FL'], label='RNAP_FL')
+    ax.legend(loc='lower right')
+    ax.set_xlabel('t')
+
+    fig.suptitle('Hard coded system')
 
     plt.show()
 
@@ -401,10 +411,24 @@ def CreateReactionSystem(G):
         rc = data['rate_constant_name']
         # add contribution to system from this connection
         factor = '*'.join([str(rc), from_node])
-        gain = ' + ' + factor
-        loss = ' - ' + factor
 
-        system[from_node] = system[from_node] + loss
+        # Some checking to make small printed systems look nice
+        if system[from_node] == '':
+            loss = '-' + factor
+        else:
+            loss = ' - ' + factor
+
+        if system[to_node] == '':
+            gain = factor
+        else:
+            gain = ' + ' + factor
+
+        # Do not subtract for mass going to a log state
+        if to_node.endswith('al'):
+            pass
+        else:
+            system[from_node] = system[from_node] + loss
+
         system[to_node] = system[to_node] + gain
 
     return system
@@ -444,12 +468,13 @@ def SolveModel(reaction_system, parameters, initial_conditions):
     DSargs.name ='Initial transcription'
     DSargs.ics = initial_conditions
     DSargs.pars = parameters
-    DSargs.tdata = [0, 450]
+    DSargs.tdata = [0, 150]
     DSargs.varspecs = reaction_system
 
     # Create the solver object
     DS = Generator.Vode_ODEsystem(DSargs)
 
+    # Solve the model!
     traj = DS.compute('demo')
 
     return traj
@@ -471,24 +496,32 @@ def PlotTrajectory(trajectory):
 
     pts = trajectory.sample()
 
-    plt.plot(pts['t'], pts['RNAP_000'], label='RNAP_000')
-    #plt.plot(pts['t'], pts['RNAP_01'], label='RNAP_01')
-    #plt.plot(pts['t'], pts['RNAP_10'], label='RNAP_10')
-    #plt.plot(pts['t'], pts['RNAP_20'], label='RNAP_20')
-    plt.plot(pts['t'], pts['RNAP_1al'], label='RNAP_1a')
-    plt.plot(pts['t'], pts['RNAP_2al'], label='RNAP_2a')
-    plt.plot(pts['t'], pts['RNAP_flt'], label='RNAP_FL')
-    plt.legend()
-    plt.xlabel('t')
+    fig, ax = plt.subplots()
+
+    ax.plot(pts['t'], pts['RNAP_000'], label='RNAP_000')
+    ax.plot(pts['t'], pts['RNAP_100'], label='RNAP_100')
+    ax.plot(pts['t'], pts['RNAP_200'], label='RNAP_200')
+    ax.plot(pts['t'], pts['RNAP_1al'], label='RNAP_1al')
+    ax.plot(pts['t'], pts['RNAP_2al'], label='RNAP_2al')
+    ax.plot(pts['t'], pts['RNAP_flt'], label='RNAP_FL')
+    ax.legend(loc='lower right')
+    ax.set_xlabel('t')
 
     plt.show()
+
+
+def CheckBalance(G):
+    """
+    Check balance of graph with respect to reaction rates.
+    """
+    pass
 
 
 def Main():
 
     # 0) Hard-code the system
     # Basic, hard-coded transcription initiation.
-    #BasicTranscription()
+    BasicTranscription()
 
     # 1) Script up the system
     # create a setup
@@ -505,6 +538,12 @@ def Main():
     initial_conditions = SetInitialConditions(G)
     parameters = GetParameters(G)
 
+    debug()
+
+    # Check if system is balanced
+    CheckBalance(G)
+
+    # Solve the model and return trajectory
     trajectory = SolveModel(reaction_system, parameters, initial_conditions)
 
     PlotTrajectory(trajectory)
