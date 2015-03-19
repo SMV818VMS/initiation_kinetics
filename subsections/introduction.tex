@@ -1,14 +1,42 @@
-Introduction
+Title: ``Kinetics of abortive transcription initiation''
+
+Method: We simulate initial transcription. We assume that initially all RNAP
+start in the closed complex formation with an initiating 2nt RNA. We then
+follow transcribing complexes.
+
+In reality, transcription initiates at millions of DNA-templates. RNAP binds,
+formes open and closed complexes, and initiates transcription. Some abort very
+fast, some transcribe a bit; backtrack; and abort; some transcribe alll the way
+to promoter escape. If an RNAP backtracks, it is assumed free to start again.
+BUT! Two RNAP cannot transcribe the same DNA at the same time. Would be nice to
+know how long one round of initial transcription takes compared to the duration
+of the experiment.
+
+We simulate one round of transcription initiation, assuming that this
+represents millions of RNAP initiating simultaneously on millions of DNA. How
+long do we let the simulation run? Well, 10 minutes, but for that we need some
+semi-accurate rate constants, but that should be OK I think. What is the effect
+of not allowing re-synthesis? Will we under-estimate the amount of early
+abortive product? If we try to fit to the abortive probability, we are actually
+fitting against a different process than what is really happening. Is there any
+way to transition from an abortive state to an initiating state, while at the
+same time keeping track of the amount of abortive RNA? I think so. You just
+need to integrate the values in the abortive states.
+
+Another case to consider is that after FL production, the RNAP is free to
+reassociate with a new promoter.
+
 
 * Do a mini-review on the kinetics of elongation and initiation.
-
-Many models sequence inspecific -- we need sequence specific model.
 
 Questions we'd like to ask:
 
 * Can we reproduce the abortive patterns from Hsu et al.?
+    Consider time: did her system stabilize?
 
 * If we can, can we estimate the effect of GreB by estimating a ``cleavage'' rate?
+
+* Can we reproduce the RNAP distributions of Margeat et al.? 
 
 * Do results improve when taking into account the steric clash at ~6nt?
     -- meaning an increase in abortive initation above what is predicted by
