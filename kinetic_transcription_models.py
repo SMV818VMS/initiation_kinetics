@@ -4,6 +4,7 @@ from matplotlib.pyplot import ion
 import matplotlib.pyplot as plt
 plt.style.use('ggplot')
 import networkx as nx
+import time
 
 # Non bliocking graphics
 ion()
@@ -377,7 +378,7 @@ def ReactionSystemSetup():
     # starting RNA length
     setup['initial_rna_length'] = 0
     # escape RNA-length
-    setup['escape_RNA_length'] = 2
+    setup['escape_RNA_length'] = 20
     # RNA-DNA duplex abortive range: abortive release may happen here, either by
     # backtracking to this duplex length or directly from this duplex length
     setup['abortive_range'] = range(1, 5+1)
@@ -465,17 +466,25 @@ def SolveModel(reaction_system, parameters, initial_conditions):
 
     ### Specify the model
     DSargs = args()
-    DSargs.name ='Initial transcription'
+    DSargs.name ='Initial_transcription'
     DSargs.ics = initial_conditions
     DSargs.pars = parameters
-    DSargs.tdata = [0, 150]
+    DSargs.tdata = [0, 450]
     DSargs.varspecs = reaction_system
 
     # Create the solver object
-    DS = Generator.Vode_ODEsystem(DSargs)
+    t0 = time.time()
+    #DS = Generator.Vode_ODEsystem(DSargs)
+    #DS = Generator.Dopri_ODEsystem(DSargs)
+    DS = Generator.Radau_ODEsystem(DSargs)
+    print('Generated model in {0} seconds'.format(time.time()-t0))
 
     # Solve the model!
+    t1 = time.time()
     traj = DS.compute('demo')
+    print('Solved model in {0} seconds'.format(time.time()-t1))
+
+    print('Total time {0} seconds'.format(time.time()-t0))
 
     return traj
 
@@ -521,7 +530,7 @@ def Main():
 
     # 0) Hard-code the system
     # Basic, hard-coded transcription initiation.
-    BasicTranscription()
+    #BasicTranscription()
 
     # 1) Script up the system
     # create a setup
@@ -533,12 +542,23 @@ def Main():
     # create the graph
     G = InitialTranscriptionReactionGraph(R, reaction_setup)
 
+    # w00T ! Solved full model with 253 states in just 30 seconds on 1 core on my
+    # lousy old laptop! On 8 modern cores perhaps 20 seconds, so 3*8=24 a
+    # minute. I will have solved for 50 ITSs in just two minutes. Err, for one
+    # parameter combinations. Pick your method judicously if you want to do
+    # this smartly. Next: is there a speed upgrade for the other solvers?
+    # XXX Even better, the compiled solvers are much faster, just 2 seconds! :)
+    print("Number of model states: {0}".format(len(G.nodes())))
+
+    # TODO: with extension to 20nt RNA OK, with 19 segfault. It's an even/odd
+    # issue. Solve this issue.
+
     # get reaction system, initial conditions, and parameter values
     reaction_system = CreateReactionSystem(G)
     initial_conditions = SetInitialConditions(G)
     parameters = GetParameters(G)
 
-    debug()
+    #debug()
 
     # Check if system is balanced
     CheckBalance(G)
