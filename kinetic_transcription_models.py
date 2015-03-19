@@ -8,26 +8,16 @@ import networkx as nx
 class RateConstants(object):
     """
     Class for providing and calculating rate constants
+
+    For now, this class only returns constants for the rate constants. In the
+    future, it will use duplex length, rna length, number of backtracked steps,
+    etc, to calculate the various rates. A lot of the actual research is going
+    to happen on these rates, so the class must be flexible and powerful.
     """
 
-    # Rates
-    forward = 0.9
-    reverse = 0.1
-    nac = 0.2
-    to_fl = 0.7
-    abortive_from_10 = 0.3
-    abortive_from_20 = 0.2
-    backtrack_from_20_to_201 = 0.3
-    abortive_from_201 = 0.3
-
-    # special rate
-    abortive_restart = 0.1
-
     # default all values to nan to avoid missing obvious mistakes
-    def __init__(self, forwardtl=float('nan'), reversetl=float('nan'),
-                       nac=float('nan'), to_fl=float('nan'),
-                       abortive=float('nan'), backtrack=float('nan'),
-                       abortive_restart=float('nan'), escape=float('nan')):
+    def __init__(self, forwardtl=0.9, reversetl=0.1, nac=0.2,
+                        abortive=0.2, backtrack=0.3, to_fl=0.7):
 
         self.forwardtl = forwardtl
         self.reversetl = reversetl
@@ -208,6 +198,8 @@ def BasicTranscription():
     plt.legend()
     plt.xlabel('t')
 
+    plt.show()
+
 
 def QualityCheck(backtrack_start, initial_rna_length, escape_RNA_length,
                     abortive_range, backtrack_until):
@@ -233,7 +225,6 @@ def QualityCheck(backtrack_start, initial_rna_length, escape_RNA_length,
 
 
 def RateConstantName(from_state, to_state):
-
     return '_to_'.join([from_state, to_state])
 
 
@@ -244,13 +235,12 @@ def AddAbortiveLogNode(G, abortive_log):
 
 def AddReaction(G, rc, from_state, to_state):
     rc_name = RateConstantName(from_state, to_state)
-    G.add_edge(from_state, to_state, rate_constant=rc, rate_constant_name=rc_name)
+    G.add_edge(from_state, to_state, rate_constant_value=rc, rate_constant_name=rc_name)
 
 
-def InitialTranscriptionReactionGraph(setup):
+def InitialTranscriptionReactionGraph(R, setup):
     """
-    Script up an initial transcription event. Save the resulting reaction
-    network as a graph with networkx.
+    Script up initial transcription. Save as graph.
 
     Code for initially transcribing RNAP: RNAP_XYZ
 
@@ -268,7 +258,8 @@ def InitialTranscriptionReactionGraph(setup):
     Assuming backtracking and direct abortive release happens from the
     pretranslocated state
     """
-    # short form
+
+    # read setup
     allow_escape = setup['allow_escape']
     backtrack_start = setup['backtrack_start']
     initial_rna_length = setup['initial_rna_length']
@@ -276,18 +267,15 @@ def InitialTranscriptionReactionGraph(setup):
     abortive_range = setup['abortive_range']
     backtrack_until_duplex_len = setup['backtrack_until_duplex_len']
 
+    # QA on setup
+    QualityCheck(backtrack_start, initial_rna_length, escape_RNA_length,
+            abortive_range, backtrack_until_duplex_len)
+
     # Template string for state variables
     state_template = 'RNAP_{0}{1}{2}'
 
-    # Initialize a rates object to calculate reaction rates for a given
-    # translocation state
-    R = RateConstants()
-
     # Initialize a graph object
     G = nx.DiGraph()
-
-    QualityCheck(backtrack_start, initial_rna_length, escape_RNA_length,
-            abortive_range, backtrack_until_duplex_len)
 
     # Create the first reaction step -> from open complex to starting complex
     open_complex = state_template.format(0, 0, 0)
@@ -321,7 +309,7 @@ def InitialTranscriptionReactionGraph(setup):
             AddReaction(G, nac_rc, previous_post_translocated, pre_translocated)
 
         # Add abortive log state if grown into the abortive range
-        if rna_len > abortive_range[0]:
+        if rna_len >= abortive_range[0]:
             abortive_log = state_template.format(rna_len, 'a', 'l')
             AddAbortiveLogNode(G, abortive_log)
 
@@ -410,7 +398,7 @@ def CreateReactionSystem(G):
             system[to_node] = ''
 
         # extract reaction rate constant
-        rc = data['rate_constant']
+        rc = data['rate_constant_name']
         # add contribution to system from this connection
         factor = '*'.join([str(rc), from_node])
         gain = ' + ' + factor
@@ -467,29 +455,59 @@ def SolveModel(reaction_system, parameters, initial_conditions):
     return traj
 
 
+def GetParameters(G):
+    """
+    Parse graph to link parameter name with parameter value
+    """
+
+    parameters = {}
+    for from_node, to_node, data in G.edges(data=True):
+        parameters[data['rate_constant_name']] = data['rate_constant_value']
+
+    return parameters
+
+
+def PlotTrajectory(trajectory):
+
+    pts = trajectory.sample()
+
+    plt.plot(pts['t'], pts['RNAP_000'], label='RNAP_000')
+    #plt.plot(pts['t'], pts['RNAP_01'], label='RNAP_01')
+    #plt.plot(pts['t'], pts['RNAP_10'], label='RNAP_10')
+    #plt.plot(pts['t'], pts['RNAP_20'], label='RNAP_20')
+    plt.plot(pts['t'], pts['RNAP_1al'], label='RNAP_1a')
+    plt.plot(pts['t'], pts['RNAP_2al'], label='RNAP_2a')
+    plt.plot(pts['t'], pts['RNAP_flt'], label='RNAP_FL')
+    plt.legend()
+    plt.xlabel('t')
+
+    plt.show()
+
+
 def Main():
 
     # 0) Hard-code the system
     # Basic, hard-coded transcription initiation.
     #BasicTranscription()
-    pass
 
     # 1) Script up the system
     # create a setup
     reaction_setup = ReactionSystemSetup()
 
-    # create the graph
-    G = InitialTranscriptionReactionGraph(reaction_setup)
+    # Rates object to calculate reaction rates for a given
+    R = RateConstants()
 
-    # create reaction system and initial conditions
+    # create the graph
+    G = InitialTranscriptionReactionGraph(R, reaction_setup)
+
+    # get reaction system, initial conditions, and parameter values
     reaction_system = CreateReactionSystem(G)
     initial_conditions = SetInitialConditions(G)
+    parameters = GetParameters(G)
 
-    trajectory = SolveModel(reaction_system, initial_conditions)
+    trajectory = SolveModel(reaction_system, parameters, initial_conditions)
 
-    print trajectory
-
-    debug()
+    PlotTrajectory(trajectory)
 
 if __name__ == '__main__':
     Main()
