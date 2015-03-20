@@ -1,13 +1,16 @@
 from PyDSTool import args, Generator
 from ipdb import set_trace as debug  # NOQA
-from matplotlib.pyplot import ion
+from matplotlib.pyplot import ion  # NOQA
 import matplotlib.pyplot as plt
 plt.style.use('ggplot')
 import networkx as nx
 import time
+from datetime import datetime
+import os
+import pandas as pd
 
 # Non bliocking graphics
-ion()
+#ion()
 
 
 class RateConstants(object):
@@ -267,7 +270,8 @@ def InitialTranscriptionReactionGraph(R, setup):
     flt  : full length transcript
 
     Assuming backtracking and direct abortive release happens from the
-    pretranslocated state
+    pretranslocated state.
+
     """
 
     # read setup
@@ -435,8 +439,9 @@ def CreateReactionSystem(G):
     return system
 
 
-def SetInitialConditions(G):
+def SetInitialValues(G):
     """
+    Set initial values for the reaction states
     """
 
     initial_found = False
@@ -459,7 +464,7 @@ def SetInitialConditions(G):
         return initial_conditions
 
 
-def SolveModel(reaction_system, parameters, initial_conditions):
+def SolveModel(reaction_system, parameters, initial_conditions, solver):
     """
     Create and solve model using PyDSTool.
     """
@@ -469,14 +474,22 @@ def SolveModel(reaction_system, parameters, initial_conditions):
     DSargs.name ='Initial_transcription'
     DSargs.ics = initial_conditions
     DSargs.pars = parameters
-    DSargs.tdata = [0, 450]
+    DSargs.tdata = [0, 400]
     DSargs.varspecs = reaction_system
 
     # Create the solver object
     t0 = time.time()
-    #DS = Generator.Vode_ODEsystem(DSargs)
-    #DS = Generator.Dopri_ODEsystem(DSargs)
-    DS = Generator.Radau_ODEsystem(DSargs)
+
+    if solver == 'vode':
+        DS = Generator.Vode_ODEsystem(DSargs)
+    elif solver == 'dopri':
+        DS = Generator.Dopri_ODEsystem(DSargs)
+    elif solver == 'radau':
+        DS = Generator.Radau_ODEsystem(DSargs)
+    else:
+        print('Wtf no solver 1/0')
+        1/0
+
     print('Generated model in {0} seconds'.format(time.time()-t0))
 
     # Solve the model!
@@ -526,6 +539,55 @@ def CheckBalance(G):
     pass
 
 
+def WriteGraphAndSetup(G, reaction_setup):
+    """
+    Write to file an image of the graph and the corresponding setup.
+    """
+
+    fig, ax = plt.subplots()
+
+    nx.draw_graphviz(G, with_labels=True, ax=ax)
+    # filename is number of translocation steps followed by a time tag
+    time_tag = str(datetime.now()).split('.')[0]
+    store_dir = 'Log'
+    if not os.path.isdir(store_dir):
+        os.makedirs(store_dir)
+
+    beg = str(reaction_setup['escape_RNA_length'])
+
+    image_path = os.path.join(store_dir, beg + '_' + time_tag + '.png')
+    fig.set_size_inches(17, 8)
+    fig.savefig(image_path)
+
+    text_path = os.path.join(store_dir, beg + '_' + time_tag + '.txt')
+    with open(text_path, 'wb') as text_handle:
+        for key, value in reaction_setup.items():
+            text_handle.write(key + '\t\t' + str(value) + '\n')
+
+
+def CheckConservationOfMass(G, initial_values, trajectory):
+    """
+    Compare total initial mass with total final mass
+    """
+
+    pts = trajectory.sample()
+    # Do not plot abortive log
+    skip_us = [n for n in G.nodes() if n.endswith('al')]
+
+    # Get the final values of the system
+    final_values = {node:pts[node][-1] for node in G.nodes()}
+
+    total_initial = sum(initial_values.values())
+    # final sum, excluding log states
+    total_final = sum([val for n, val in final_values.items() if not n in skip_us])
+
+    print('Total initial: {0}'.format(total_initial))
+    print('Total final: {0}'.format(total_final))
+
+    # bar plots with rotated labels?
+    #ax.plot(pts['t'], pts['RNAP_000'], label='RNAP_000')
+
+
 def Main():
 
     # 0) Hard-code the system
@@ -542,29 +604,46 @@ def Main():
     # create the graph
     G = InitialTranscriptionReactionGraph(R, reaction_setup)
 
-    # w00T ! Solved full model with 253 states in just 30 seconds on 1 core on my
-    # lousy old laptop! On 8 modern cores perhaps 20 seconds, so 3*8=24 a
-    # minute. I will have solved for 50 ITSs in just two minutes. Err, for one
-    # parameter combinations. Pick your method judicously if you want to do
-    # this smartly. Next: is there a speed upgrade for the other solvers?
-    # XXX Even better, the compiled solvers are much faster, just 2 seconds! :)
+    # Create a plot of the graph and the reaction setup used to generate it
+    WriteGraphAndSetup(G, reaction_setup)
+
     print("Number of model states: {0}".format(len(G.nodes())))
 
-    # TODO: with extension to 20nt RNA OK, with 19 segfault. It's an even/odd
-    # issue. Solve this issue.
+    # TODO: with extension to 2nt RNA OK, with 3 segfault. It's an even/odd
+    # issue. Solve this issue. After deleting all files, it works again for 2.
+    # before, it failed even for 2.
+    # Works: 2
+    # Fails: X
+    # XXX Discovery: if I delelte all the generated files, it's OK.
+    # XXX Discovery: radau generated mass for full system: 7. dopri was OK.
+    # took 9 seconds though.
+    # You need to figure out HOW MUCH you need to delete. You need to read up
+    # on the usage of these two solvers. Godsbedamned. Well. At least you have
+    # dopri now solving in 10 seconds. It's not too bad.
+    # XXX: edit: but from the manual, we might be able to do this by editing
+    # the Generator object. In other words, we run, and then give a new set of
+    # equations to the generator object, and run again? You have to test this.
 
     # get reaction system, initial conditions, and parameter values
     reaction_system = CreateReactionSystem(G)
-    initial_conditions = SetInitialConditions(G)
+    initial_values = SetInitialValues(G)
     parameters = GetParameters(G)
 
-    #debug()
-
     # Check if system is balanced
-    CheckBalance(G)
+    #CheckBalance(G)
 
-    # Solve the model and return trajectory
-    trajectory = SolveModel(reaction_system, parameters, initial_conditions)
+    #solvers = ['vode', 'dopri', 'radau']
+    ## Solve the model and return trajectory
+    #for s
+    #solver = 'vode'
+    solver = 'radau'
+    #solver = 'dopri'
+    trajectory = SolveModel(reaction_system, parameters, initial_values, solver)
+    #for solver in solvers:
+        #print(" --- SOLVER --->>>> {0}".format(solver))
+        #trajectory = SolveModel(reaction_system, parameters, initial_values, solver)
+
+    CheckConservationOfMass(G, initial_values, trajectory)
 
     PlotTrajectory(trajectory)
 
