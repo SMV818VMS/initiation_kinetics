@@ -1,0 +1,14 @@
+
+w00T ! Solved full model with 253 states in just 30 seconds on 1 core on my
+lousy old laptop! And the compiled solvers are much faster, just 2 seconds! :)
+With 8 cores that is 4 sequences a second, or DG100 in 11 seconds. So about 5
+DG100 runs a minute, or 300 in an hour. In 4 hours you get at least 1000 runs.
+Which is just 10 values for 3 different parameters: you have potentially 250
+different parameters. So. The problem can never be tackled by brute force. You
+must divide-and-conquer. One method is to define different regimes, as
+discussed before. Use linear, exponential, logarithmic, zero effect, etc. Give
+over-all weights to different processes: forward, reverse, backtracking,
+abortion. Then calculate parameter sensitivity on this over-all scaling. That
+should allow you to exclude some obvious cases, which shows that the method is
+not total BS, while it may conclude that it is not possible to distinguish
+between method 1 and method 2 for example.
