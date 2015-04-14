@@ -7,7 +7,6 @@ import networkx as nx
 import time
 from datetime import datetime
 import os
-import pandas as pd
 from multiprocessing import Pool
 
 # Non bliocking graphics
@@ -464,6 +463,7 @@ def SetInitialValues(G):
     else:
         return initial_conditions
 
+
 def SolveModel(model):
 
     t1 = time.time()
@@ -582,6 +582,7 @@ def CheckConservationOfMass(G, initial_values, trajectory):
     # bar plots with rotated labels?
     #ax.plot(pts['t'], pts['RNAP_000'], label='RNAP_000')
 
+
 def GenerateInput(reaction_setup, R, G):
     """
     Create a graph based on the raction setup and rate constants. From the
@@ -600,6 +601,7 @@ def GenerateInput(reaction_setup, R, G):
 
     return reaction_system, initial_values, parameters
 
+
 def wrapper(simtimes, model):
 
     trajs = []
@@ -611,9 +613,37 @@ def wrapper(simtimes, model):
 
     return trajs
 
+
 def main():
     # TODO next time: start working with an ITS: generate rates and run
-    # simulation. Start getting a feel for the kinetic parameters. 
+    # simulation. Start getting a feel for the kinetic parameters.
+
+    # What questions will your study answer?
+    # 1) Is the standard kinetic model sufficient to describe transciption
+    # initiation? Noe that (more recent) elongation models add an extra state
+    # not experimentally validated (not Bai's, but ...?) but they are using
+    # kinetic approximations, which rely on steady state approximations (even
+    # Omaguodligd?).
+    # 2) Having shown a correlation with a translocation equilibrium approach,
+    # we wish to see if a kinetic discription of the process can improve
+    # things.
+    # 3) In want of detailed kinetic studies of transcriptiopn initiation with
+    # E. coli RNAP, can we put together the existing knowledge in the
+    # literature to model the process from what is known from ensemble snapshot
+    # studies?
+
+    # Will you be able to distinguish between models? What will be the value?
+    # What is the question? Is the standard Pre<->post->nuc model sufficient to
+    # describe the process? Some use simpler models (Patel, Malinen) others add
+    # a new state. The addition of a new state may be because of lack of
+    # sequence-dependent fitting.
+
+    # What should influence the different rates
+    # Forward translocation: #1 Malinen, #2 RNA-DNA/DNA-DNA, #3 length-dependent, #4 constant
+    # Reverse translocation: #1 Malinen/Hein, #2 constant
+    # Nucleotide addition #1 Malinen, #2 constant
+    #
+    #
 
     # create a setup
     reaction_setup = ReactionSystemSetup()
@@ -647,19 +677,18 @@ def main():
     # without. Multiprocessing may be useful if you find other tasks.
     for simtime in simtimes:
 
-        #model.set(tdata=[0, simtime])
         #job = pool.apply_async(SolveModel, args=(model,))
         #jobs.append(job)
 
+        model.set(tdata=[0, simtime])
         trajectory = SolveModel(model)
-        #trajs.append(trajectory)
         CheckConservationOfMass(G, initial_values, trajectory)
         #PlotTrajectory(trajectory)
 
-    #pool.close()
-    #pool.join()
-    #trajs = [j.get() for j in jobs]
-    #[CheckConservationOfMass(G, initial_values, traj) for traj in trajs]
+    pool.close()
+    pool.join()
+    trajs = [j.get() for j in jobs]
+    [CheckConservationOfMass(G, initial_values, traj) for traj in trajs]
 
     print('Finished solving all models in {0} seconds'.format(time.time()-newtime))
 
