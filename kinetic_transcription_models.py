@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 import os
 import pandas as pd
+from multiprocessing import Pool
 
 # Non bliocking graphics
 #ion()
@@ -463,8 +464,16 @@ def SetInitialValues(G):
     else:
         return initial_conditions
 
+def SolveModel(model):
 
-def SolveModel(reaction_system, parameters, initial_conditions, solver):
+    t1 = time.time()
+    traj = model.compute('demo')
+    print('Solved model in {0} seconds'.format(time.time()-t1))
+
+    return traj
+
+
+def BuildModel(reaction_system, parameters, initial_conditions, solver):
     """
     Create and solve model using PyDSTool.
     """
@@ -492,14 +501,7 @@ def SolveModel(reaction_system, parameters, initial_conditions, solver):
 
     print('Generated model in {0} seconds'.format(time.time()-t0))
 
-    # Solve the model!
-    t1 = time.time()
-    traj = DS.compute('demo')
-    print('Solved model in {0} seconds'.format(time.time()-t1))
-
-    print('Total time {0} seconds'.format(time.time()-t0))
-
-    return traj
+    return DS
 
 
 def GetParameters(G):
@@ -529,14 +531,7 @@ def PlotTrajectory(trajectory):
     ax.legend(loc='lower right')
     ax.set_xlabel('t')
 
-    plt.show()
-
-
-def CheckBalance(G):
-    """
-    Check balance of graph with respect to reaction rates.
-    """
-    pass
+    #plt.show()
 
 
 def WriteGraphAndSetup(G, reaction_setup):
@@ -587,65 +582,86 @@ def CheckConservationOfMass(G, initial_values, trajectory):
     # bar plots with rotated labels?
     #ax.plot(pts['t'], pts['RNAP_000'], label='RNAP_000')
 
-
-def Main():
-
-    # 0) Hard-code the system
-    # Basic, hard-coded transcription initiation.
-    #BasicTranscription()
-
-    # 1) Script up the system
-    # create a setup
-    reaction_setup = ReactionSystemSetup()
-
-    # Rates object to calculate reaction rates for a given
-    R = RateConstants()
-
-    # create the graph
-    G = InitialTranscriptionReactionGraph(R, reaction_setup)
+def GenerateInput(reaction_setup, R, G):
+    """
+    Create a graph based on the raction setup and rate constants. From the
+    graph, obtain the system equations, initial values, and parameters (rate
+    coefficients)
+    """
 
     # Create a plot of the graph and the reaction setup used to generate it
     WriteGraphAndSetup(G, reaction_setup)
-
     print("Number of model states: {0}".format(len(G.nodes())))
-
-    # TODO: with extension to 2nt RNA OK, with 3 segfault. It's an even/odd
-    # issue. Solve this issue. After deleting all files, it works again for 2.
-    # before, it failed even for 2.
-    # Works: 2
-    # Fails: X
-    # XXX Discovery: if I delelte all the generated files, it's OK.
-    # XXX Discovery: radau generated mass for full system: 7. dopri was OK.
-    # took 9 seconds though.
-    # You need to figure out HOW MUCH you need to delete. You need to read up
-    # on the usage of these two solvers. Godsbedamned. Well. At least you have
-    # dopri now solving in 10 seconds. It's not too bad.
-    # XXX: edit: but from the manual, we might be able to do this by editing
-    # the Generator object. In other words, we run, and then give a new set of
-    # equations to the generator object, and run again? You have to test this.
 
     # get reaction system, initial conditions, and parameter values
     reaction_system = CreateReactionSystem(G)
     initial_values = SetInitialValues(G)
     parameters = GetParameters(G)
 
-    # Check if system is balanced
-    #CheckBalance(G)
+    return reaction_system, initial_values, parameters
 
-    #solvers = ['vode', 'dopri', 'radau']
-    ## Solve the model and return trajectory
-    #for s
-    #solver = 'vode'
-    solver = 'radau'
-    #solver = 'dopri'
-    trajectory = SolveModel(reaction_system, parameters, initial_values, solver)
-    #for solver in solvers:
-        #print(" --- SOLVER --->>>> {0}".format(solver))
-        #trajectory = SolveModel(reaction_system, parameters, initial_values, solver)
+def wrapper(simtimes, model):
 
-    CheckConservationOfMass(G, initial_values, trajectory)
+    trajs = []
+    for simtime in simtimes:
+        model.set(tdata=[0, simtime])
 
-    PlotTrajectory(trajectory)
+        trajectory = SolveModel(model)
+        trajs.append(trajectory)
+
+    return trajs
+
+def main():
+    # TODO next time: start working with an ITS: generate rates and run
+    # simulation. Start getting a feel for the kinetic parameters. 
+
+    # create a setup
+    reaction_setup = ReactionSystemSetup()
+    # Rates object to calculate reaction rates for a given
+    R = RateConstants()
+    G = InitialTranscriptionReactionGraph(R, reaction_setup)
+
+    reaction_system, initial_values, parameters = GenerateInput(reaction_setup, R, G)
+
+    #solver = 'vode'  # 1s setup, 9.5s, 18s, 23s (200, 400, 500 time) solver
+    #solver = 'radau'  # 15s setup, 0.26s solver
+    solver = 'dopri'  # 5s setup, 0.1s solver, only 10% multiproc speedup
+
+    model = BuildModel(reaction_system, parameters, initial_values, solver)
+    trajs = []
+    jobs = []
+    newtime = time.time()
+    pool = Pool(processes=4)
+
+    simtimes = [200, 450, 600, 700, 800, 200, 1000, 300, 346,
+                200, 450, 600, 700, 800, 200, 1000, 300, 346,
+                200, 450, 600, 700, 800, 200, 1000, 300, 346,
+                200, 450, 600, 700, 800, 200, 1000, 300, 346,
+                200, 450, 600, 700, 800, 200, 1000, 300, 346]
+
+    # for 45 sequences on 4 cores you get a 1.6x speedup
+    # on 2 cores in ran nearly as fast (5.11 vs 4.22) on 4 cores!
+    # each process completed in 0.11 on 4 cores, but 0.15 on 4 ... there must
+    # be some blocking going on with the compiled code.
+    # with 1 core you ran in 8.8 seconds with multiprocessing, and 5.6 seconds
+    # without. Multiprocessing may be useful if you find other tasks.
+    for simtime in simtimes:
+
+        #model.set(tdata=[0, simtime])
+        #job = pool.apply_async(SolveModel, args=(model,))
+        #jobs.append(job)
+
+        trajectory = SolveModel(model)
+        #trajs.append(trajectory)
+        CheckConservationOfMass(G, initial_values, trajectory)
+        #PlotTrajectory(trajectory)
+
+    #pool.close()
+    #pool.join()
+    #trajs = [j.get() for j in jobs]
+    #[CheckConservationOfMass(G, initial_values, traj) for traj in trajs]
+
+    print('Finished solving all models in {0} seconds'.format(time.time()-newtime))
 
 if __name__ == '__main__':
-    Main()
+    main()
