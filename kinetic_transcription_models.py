@@ -7,6 +7,7 @@ import networkx as nx
 import time
 from datetime import datetime
 import os
+import numpy as np
 
 # Non bliocking graphics
 #ion()
@@ -267,7 +268,7 @@ def AddReaction(G, rc, from_state, to_state):
     G.add_edge(from_state, to_state, rate_constant_value=rc, rate_constant_name=rc_name)
 
 
-def Model_2_Graph(R, setup):
+def Model_2_Graph(setup):
     """
     Most simple model of transcription initiation. Contains:
 
@@ -287,6 +288,9 @@ def Model_2_Graph(R, setup):
     5al : proxy for aborted RNA of length 5
     flt : full length transcript
     """
+
+    # Get Rate constants
+    R = RateConstants()
 
     # Initialize a graph object
     G = nx.DiGraph()
@@ -496,13 +500,13 @@ def ReactionSystemSetup():
     # You can choose not to let the sytem proceed to escape
     setup['allow_escape'] = True
     # Where promoter escape may start from
-    setup['escape_start'] = 15
+    setup['escape_start'] = 3
     # RNA length where backtracking may start
     setup['backtrack_start'] = 2
     # starting RNA length
     setup['initial_rna_length'] = 0
     # escape RNA-length: last point of escape
-    setup['final_escape_RNA_length'] = 18
+    setup['final_escape_RNA_length'] = 5
     # RNA-DNA duplex abortive range: abortive release may happen here, either by
     # backtracking to this duplex length or directly from this duplex length
     setup['abortive_range'] = range(1, 5+1)
@@ -641,11 +645,40 @@ def GetParameters(G):
     return parameters
 
 
-def PlotTrajectoryModel(trajectory):
+def CalcNTP(trajectory, starting_amount=30):
+    """
+    Calculate NTP consumption. Subtract this from starting_amount.
+    """
+    pts = trajectory.sample()
+    nr_timesteps = len(pts['t'])
+    nr_ntp = np.zeros(nr_timesteps)
+    for state_name in pts.keys():
+
+        # add nucleotides from the abortive log states
+        if state_name.endswith('al'):
+            code = state_name.split('_')[1]
+            abortive_length = int(code[0])
+            nr_ntp = nr_ntp + pts[state_name] * abortive_length
+
+        # add nucleotides from full length
+        transcript_length = 74
+        if state_name.endswith('flt'):
+            nr_ntp = nr_ntp + pts[state_name] * transcript_length
+
+    nr_ntp = starting_amount - nr_ntp
+
+    return nr_ntp
+
+
+def PlotTrajectoryModel(trajectory, NTP):
 
     pts = trajectory.sample()
-
     fig, ax = plt.subplots()
+
+    plot_ntp = True
+
+    if plot_ntp:
+        ax.plot(pts['t'], NTP, label='NTP')
 
     ax.plot(pts['t'], pts['RNAP_000'], label='RNAP_000')
     ax.plot(pts['t'], pts['RNAP_100'], label='RNAP_100')
@@ -766,7 +799,7 @@ def CreateModel_1_Graph():
     return G
 
 
-def CreateModel_2_Graph():
+def CreateModel_2_Graph(reaction_setup):
     """
     How do I avoid copy-waste code?
 
@@ -781,14 +814,8 @@ def CreateModel_2_Graph():
     want to experiment with different setups for different models. Take that when it comes.
     """
 
-    # Stoichiometry setup
-    reaction_setup = ReactionSystemSetup()
-
-    # Rate constants
-    R = RateConstants()
-
     # Create graph
-    G = Model_2_Graph(R, reaction_setup)
+    G = Model_2_Graph(reaction_setup)
 
     WriteGraphAndSetup(G, reaction_setup, tag='model_2')
 
@@ -819,19 +846,20 @@ def main():
     # Entry into backtracked state: #1 constant (ala Patel), #2 length-dependent, #DNA-DNA (scrunch)
     # Rate of backtracking #1 constant, 2# RNA-DNA energy; 3# length-dependent (hybrid)
 
-    #model_graph = CreateModel_1_Graph()
-    model_graph = CreateModel_2_Graph()
+    # Stoichiometry setup
+    reaction_setup = ReactionSystemSetup()
 
-    #debug()
+    # XXX one consideration: after a full-length transcript is produced, RNAP
+    # is free to re-bind a promoter either on the same DNA or ona different DNA molecule
+    #model_graph = CreateModel_1_Graph(reaction_setup)
+    model_graph = CreateModel_2_Graph(reaction_setup)
 
     # Valid for all directed graphs with associated rates
     reaction_system, initial_values, parameters = GenerateInput(model_graph)
 
-    #debug()
-
-    #solver = 'vode'  # 1s setup, 9.5s, 18s, 23s (200, 400, 500 time) solver
+    solver = 'vode'  # 1s setup, 9.5s, 18s, 23s (200, 400, 500 time) solver
     #solver = 'radau'  # 15s setup, 0.26s solver # does not work on laptop...
-    solver = 'dopri'  # 5s setup, 0.1s solver, only 10% multiproc speedup
+    #solver = 'dopri'  # 5s setup, 0.1s solver, only 10% multiproc speedup
 
     pdt_model = BuildModel(reaction_system, parameters, initial_values, solver)
     trajectory = SolveModel(pdt_model)
@@ -841,7 +869,9 @@ def main():
 
     CheckConservationOfMass(model_graph, initial_values, trajectory)
 
-    PlotTrajectoryModel(trajectory)
+    NTP = CalcNTP(trajectory)
+
+    PlotTrajectoryModel(trajectory, NTP=NTP)
 
 if __name__ == '__main__':
     main()
