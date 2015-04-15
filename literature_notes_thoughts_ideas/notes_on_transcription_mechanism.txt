@@ -1,0 +1,122 @@
+* Trigger loop == G loop
+contributes to non-backtracked pauses (Toulukhonov 2007)
+promotes nucleotide addition when folded (Zhang 2009)
+folding of trigger loop into trigger helix enhances nucleotidyl transfer up to
+10000 fold
+
+* nucleotidyl = nucleotide residue = nucleotide part of a nucleic acid chain
+
+* RNAP active site can catalyze two reactions:
+    nucleotidyl transfer == RNA + 1 nucleotide
+    RNA hydrolysis == transcript cleavage == uses PPi as a nuclephile to
+    release NTP.
+    (and pyrophosphorolysis...!)
+
+    nucleotidyl transfer requires conformation changes in both trigger loop and
+    bridge helix
+
+*    NTP binds in the i+1 site of the active center while the TL is relaxed
+(unfolded) and induces its transition into an alpha-helical hairpin (TH), which
+packs against the BH in a three-helix bundle, resulting in the closing of the
+active site. In this conformationm, the TL (TH) directly contacts the substrate
+and facilitates nucleotidyl transfer (Miropolskayaú 2010). Malinen et. al says
+that the the folding of the trigger loop / closing of the active site is
+affected by affinity of TL for 3' end.
+
+    From discussion in Malinen et. al:
+    Crystallographic and biochemical studies suggest that
+    folding of the TL occurs spontaneously, even in the
+    absence of bound NTP substrate, and is accompanied by
+    relocation of the b-pincer domain, which increases the mo-
+    bility of downstream DNA (2)(:Vassylev)
+
+* My understanding now: PPi release somehow leads to TL unfolding. Now forward
+  translocation can happen (TL independent). If TL folds again before
+  incorporation of NTP, then reverse translocation can happen. Then, if forward
+  translocation happens again (despite the affinity of 3' end for TL), TL can
+  unfold, and NTP can bind. Alternatively, TL unfolds despite 3' end in the
+  subtrate site, allowing forward translocation yet again. There does not seem
+  to be any real info in the literature on how the trigger loop folds, except
+  what Malinen et. al have contributed, which is not much, except that it's
+  coupled to PPi release.
+
+* Malinen et al found that the forward translocation rate was largely
+  unaffected by sequence, which must mean that their equilibrium studies that
+  showed the G>A>C>U preference must mean that it is reverse translocation that
+  is most sequence dependent. This matches what Hein et. al found! they
+  found that the k1 rates for pyrophosphorolysis varied much more than the
+  k_minus_rates. If pyrophosphorolysis rates reflect translocation rates, this
+  means that forward translocation rate were much more similar than reverse
+  translocation rates. 
+
+* I guess that backtracking happens from the pre-translocated state after TL
+  unfolding and concurrent PPi release, but before translocation. It's a step
+  backwards when forwards was intended. It's possible that by having a strong
+  affinity for the trigger loop, the 3' RNA end can induce trigger loop
+  folding, which stabilizes the pre-translocated state. When next the TL
+  spontaneously unfolds, the 3'RNA has yet another chance at becoming
+  backtracked. So the competition is between 3'end-TL and forward
+  translocation. This can justify your approach. The brownian motion model
+  stats that forward translocation occurs by thermal movement, which may explain
+  why it's not sequence dependent.
+
+* Bridge helix, metastable alpha helix that spans the leading edge of the
+  active site cleft
+
+* F loop, adjacent to to the N terminus of the bridge helix and directly
+  contrats the folded trigger loop. Essential for proper folding of trigger
+  loop during nucleotide addition and giverns temperature adaptivity.
+
+* Streptolydgin: blocks trigger loop folding
+
+* In Hsu 2003 it is shown that the abortive but NOT the productive rate
+  increases with increasing [NTP]. How do you explain that given your model
+  formulation?
+
+        FL depends also on incorporation after promoter escape, but should be rate
+    limited by abortive initiation. We see more abortive initiation, but the same
+    productive rate. I have no answer. Misincorporation induces backtracking, is
+    there anything there?
+
+  She also concludes that the rate-limiting step leading to the formation of an
+  abortive product is normally not affected by NTP concentration.
+
+* Interesting: U > C > A > G for long backtracked pauses when each nucleotide
+  is given in large addition for RNAP II (Larson et. al 2012).
+
+* Nudler 1997 says that RNA-DNA hybrid maintains the register and prevents
+  backtracking
+
+* Sydow and Kramer 2009: on misincorporation, the bad nucleotide is frayed;
+* fraying prevents ntp addition, pauses RNAP, and facilitates backtracking
+  because of reduced RNA-DNA hybrid length??
+
+* Here is some thinking for you: the rate of pauses and backtracking can be
+  found from single-molecule studies (several by Landick)
+
+* It's popular now to use the non-equilibrum approach, so do that of course. 
+  First try to find an overall balance between pre-translocated and
+  post-tranlsocated rate constants, assuming two different rates for entering
+  pauses: high and low
+
+* Assuming backtracking originates from a paused state, give some kind of
+  estimate of how much RNAP spends in the paused state during abortive cycling
+  (some help from Margeat?) Margeat indicates little time is spent with +1, +2,
+  +3, +4 RNA, so assume rapid translocation up to here (but of course, there is
+   abortive initiation here too, a lot in a way)
+* You have a big picture to fit: the general abortive pattern
+
+* Then try to see if this 
+
+* Can you estimate the rate of entering into a pause and comparing
+* this to elongation studies?
+
+* There are several possibilities for where the effect of scrunching comes in.
+    - One is by affecting the translocation rates directly
+        - which in turn will affect - not the rate, but - how often a paused
+          state is entered
+    - Another is by affecting the rate of entering pauses
+    - A third is to affect the rate of escaping from pauses
+
+* For the sigma-effect, model as a decrease in forward translocation rate
+
