@@ -824,20 +824,12 @@ def CreateModel_2_Graph(reaction_setup):
 
 def main():
 
-    # TODO next time: continue specifying several models. You are going to
-    # investigate increasingly complex models to evaluate their individual
-    # usefullness. You'll need an easy way to specify models and rate
-    # coefficients so that it is perfectly clear which model you are using and
-    # which rate coefficients
-
-    # XXX two ways of doing this. 1) make a sufficiently complex single class
-    # that can generate all these models given basic instructions. 2) make one
-    # class per model. If you have different variants of each model, such as
-    # different regimes for finding the rate coefficients, these can be named 1a, 1b, 1c.
-    # I think alternative 2) is the best.
-
     # TODO after that: start working with an ITS: generate rates and run
     # simulation. Start getting a feel for the kinetic parameters.
+
+    # TODO: Lissen, you got your first super-simplified model. Try to get some bar-charts and PY
+    # calculations up and running. Gonna look great! See how close you get. Solve problems as you
+    # go along.
 
     # What should influence the different rates
     # Forward translocation: #1 Malinen, #2 RNA-DNA/DNA-DNA, #3 length-dependent, #4 constant
@@ -869,7 +861,7 @@ def main():
 
     CheckConservationOfMass(model_graph, initial_values, trajectory)
 
-    NTP = CalcNTP(trajectory)
+    NTP = CalcNTP(trajectory, starting_amount=30)
 
     PlotTrajectoryModel(trajectory, NTP=NTP)
 
