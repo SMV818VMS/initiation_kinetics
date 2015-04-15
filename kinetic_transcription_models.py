@@ -7,7 +7,6 @@ import networkx as nx
 import time
 from datetime import datetime
 import os
-from multiprocessing import Pool
 
 # Non bliocking graphics
 #ion()
@@ -25,7 +24,8 @@ class RateConstants(object):
 
     # default all values to nan to avoid missing obvious mistakes
     def __init__(self, forwardtl=0.9, reversetl=0.1, nac=0.2,
-                        abortive=0.2, backtrack=0.3, to_fl=0.7):
+                        abortive=0.2, backtrack=0.3, to_fl=0.7,
+                        backstep=0.3):
 
         self.forwardtl = forwardtl
         self.reversetl = reversetl
@@ -33,6 +33,7 @@ class RateConstants(object):
         self.to_fl = to_fl
         self.abortive = abortive
         self.backtrack = backtrack
+        self.backstep = backstep
 
     def Forward(self):
         return self.forwardtl
@@ -42,6 +43,9 @@ class RateConstants(object):
 
     def Backtrack(self):
         return self.backtrack
+
+    def Backstep(self):
+        return self.backstep
 
     def Nac(self):
         return self.nac
@@ -215,22 +219,27 @@ def BasicTranscription():
     plt.show()
 
 
-def QualityCheck(backtrack_start, initial_rna_length, escape_RNA_length,
-                    abortive_range, backtrack_until):
+def QualityCheckModel_1(backtrack_start, initial_rna_length, final_escape_RNA_length,
+                        abortive_range, backtrack_until, escape_start):
     """
     Do some sanity checking to verify that the settings for creating the
     reaction network graph is correct.
     """
     warnings = []
+
+    if escape_start > final_escape_RNA_length:
+        warning = 'Escape starts after it ends!'
+        warnings.append(warning)
+
     if backtrack_until not in abortive_range:
         warning = 'Backtracking states exist that do not abort!'
         warnings.append(warning)
 
-    if initial_rna_length > escape_RNA_length:
+    if initial_rna_length > final_escape_RNA_length:
         warning = 'Initial RNA length longer than escape length!'
         warnings.append(warning)
 
-    if backtrack_start > escape_RNA_length:
+    if backtrack_start > final_escape_RNA_length:
         warning = 'No backtracking possible!'
         warnings.append(warning)
 
@@ -252,9 +261,16 @@ def AddReaction(G, rc, from_state, to_state):
     G.add_edge(from_state, to_state, rate_constant_value=rc, rate_constant_name=rc_name)
 
 
-def InitialTranscriptionReactionGraph(R, setup):
+def Model_1_Graph(R, setup):
     """
-    Script up initial transcription. Save as graph.
+
+    Most general model of transcription initiation. Contains the following reactions:
+
+    * Nucleotide addition / PPi release
+    * Forward translocation
+    * Reverse translocation
+    * Backtracking from pre-translocated state
+    * Backtracking from each backtracked state
 
     Code for initially transcribing RNAP: RNAP_XYZ
 
@@ -267,24 +283,24 @@ def InitialTranscriptionReactionGraph(R, setup):
     510 : len 5 duplex in the post-translocated state
     503 : len 2 duplex backtracked 3 steps
     5al : len 5 RNA aborted log -- total aborted RNAP / proxy for aborted RNA of length 5
-    flt  : full length transcript
+    flt : full length transcript
 
-    Assuming backtracking and direct abortive release happens from the
-    pretranslocated state.
+    Assuming backtracking and direct abortive release happens from the pretranslocated state.
 
     """
 
     # read setup
     allow_escape = setup['allow_escape']
+    escape_start = setup['escape_start']
     backtrack_start = setup['backtrack_start']
     initial_rna_length = setup['initial_rna_length']
-    escape_RNA_length = setup['escape_RNA_length']
+    final_escape_RNA_length = setup['final_escape_RNA_length']  # maximum length
     abortive_range = setup['abortive_range']
     backtrack_until_duplex_len = setup['backtrack_until_duplex_len']
 
     # QA on setup
-    QualityCheck(backtrack_start, initial_rna_length, escape_RNA_length,
-            abortive_range, backtrack_until_duplex_len)
+    QualityCheckModel_1(backtrack_start, initial_rna_length, final_escape_RNA_length,
+            abortive_range, backtrack_until_duplex_len, escape_start)
 
     # Template string for state variables
     state_template = 'RNAP_{0}{1}{2}'
@@ -301,10 +317,15 @@ def InitialTranscriptionReactionGraph(R, setup):
     else:
         starting_complex = open_complex
 
+    # Create the full length (FL) state
+    if allow_escape:
+        full_length = state_template.format('f', 'l', 't')
+
     # Tag the starting complex -- and create it, if not already made
     G.add_node(starting_complex, initial_node=True)
 
-    for rna_len in range(initial_rna_length, escape_RNA_length + 1):
+    # Following the growing RNA to explore all possible model states
+    for rna_len in range(initial_rna_length, final_escape_RNA_length + 1):
 
         # Define the different possible states associatd with an RNA of this length
         pre_translocated = state_template.format(rna_len, 0, 0)
@@ -335,7 +356,7 @@ def InitialTranscriptionReactionGraph(R, setup):
 
                 # first step from pre-translocated
                 if nr_backtracked_steps == 1:
-                    first_backtrack_rc = R.Backtrack()
+                    first_backtrack_rc = R.Backstep()
                     AddReaction(G, first_backtrack_rc, pre_translocated, this_backtracked)
 
                 # subsequent from previous backtracked state
@@ -358,31 +379,30 @@ def InitialTranscriptionReactionGraph(R, setup):
             # add log
             AddReaction(G, abortive_rc, pre_translocated, abortive_log)
 
-        # last state that should be made
-        if (rna_len == escape_RNA_length):
-            if allow_escape:
-                full_length = state_template.format('f', 'l', 't')
+        if allow_escape:
+            if rna_len >= escape_start:
                 escape_rc = R.ToFL()
                 AddReaction(G, escape_rc, post_translocated, full_length)
-            break
 
     return G
 
 
-def ReactionSystemSetup():
+def ReactionSystemSetupModel_1():
     """
-    Setup for the reaction system
+    Setup for the reaction system of Model 1
     """
     setup = {}
 
     # You can choose not to let the sytem proceed to escape
     setup['allow_escape'] = True
+    # Where promoter escape may start from
+    setup['escape_start'] = 3
     # RNA length where backtracking may start
     setup['backtrack_start'] = 2
     # starting RNA length
     setup['initial_rna_length'] = 0
-    # escape RNA-length
-    setup['escape_RNA_length'] = 20
+    # escape RNA-length: last point of escape
+    setup['final_escape_RNA_length'] = 5
     # RNA-DNA duplex abortive range: abortive release may happen here, either by
     # backtracking to this duplex length or directly from this duplex length
     setup['abortive_range'] = range(1, 5+1)
@@ -399,8 +419,11 @@ def ReactionSystemSetup():
 
 def CreateReactionSystem(G):
     """
-    Take a graph with nodes, edges, and 'rate_constant' attributes and create a
-    reaction system
+    Create reaction system from directed graph with 'rate_constant'.
+
+    Requires: directed graph; each directed edge must have a rate constant.
+    Optional: if a 'to-node' has a name that ends with 'al', the 'from-node'
+              will not be associated with a loss of mass to this 'log' node.
     """
 
     system = {}
@@ -417,7 +440,7 @@ def CreateReactionSystem(G):
         # add contribution to system from this connection
         factor = '*'.join([str(rc), from_node])
 
-        # Some checking to make small printed systems look nice
+        # Remove spacing to make small printed systems look nice
         if system[from_node] == '':
             loss = '-' + factor
         else:
@@ -441,7 +464,11 @@ def CreateReactionSystem(G):
 
 def SetInitialValues(G):
     """
-    Set initial values for the reaction states
+    Set initial values for all nodes except initial node to 0.
+    Start with 1 for initial node.
+
+    Requires: graph G with at most one initial node.
+    Dislikes: more than one initial node. Will bark.
     """
 
     initial_found = False
@@ -506,7 +533,9 @@ def BuildModel(reaction_system, parameters, initial_conditions, solver):
 
 def GetParameters(G):
     """
-    Parse graph to link parameter name with parameter value
+    Parse graph to link parameter name with parameter value.
+
+    Requires: directd graph G with attributes rate_constant_name and rate_constant_value.
     """
 
     parameters = {}
@@ -516,7 +545,7 @@ def GetParameters(G):
     return parameters
 
 
-def PlotTrajectory(trajectory):
+def PlotTrajectoryModel_1(trajectory):
 
     pts = trajectory.sample()
 
@@ -548,7 +577,10 @@ def WriteGraphAndSetup(G, reaction_setup):
     if not os.path.isdir(store_dir):
         os.makedirs(store_dir)
 
-    beg = str(reaction_setup['escape_RNA_length'])
+    if 'final_escape_RNA_length' in reaction_setup:
+        beg = str(reaction_setup['final_escape_RNA_length'])
+    else:
+        beg = '0'
 
     image_path = os.path.join(store_dir, beg + '_' + time_tag + '.png')
     fig.set_size_inches(17, 8)
@@ -583,16 +615,18 @@ def CheckConservationOfMass(G, initial_values, trajectory):
     #ax.plot(pts['t'], pts['RNAP_000'], label='RNAP_000')
 
 
-def GenerateInput(reaction_setup, R, G):
+def GenerateInput(G):
     """
     Create a graph based on the raction setup and rate constants. From the
     graph, obtain the system equations, initial values, and parameters (rate
-    coefficients)
-    """
+    coefficients).
 
-    # Create a plot of the graph and the reaction setup used to generate it
-    WriteGraphAndSetup(G, reaction_setup)
-    print("Number of model states: {0}".format(len(G.nodes())))
+    Requires a directed graph G where each directed node is associated with a
+    'rate_constant_name' and 'rate_constant_value'. Also requires one of the
+    nodes to be called 'initial_node'.
+
+    This method is agnostic towards how the graph is crated.
+    """
 
     # get reaction system, initial conditions, and parameter values
     reaction_system = CreateReactionSystem(G)
@@ -614,83 +648,78 @@ def wrapper(simtimes, model):
     return trajs
 
 
+def CreateModel_1_Graph():
+    """
+    Setup and create a graph for Model_1
+
+    Model_1 is the most complete model of transcription initiation. The only
+    thing it perhaps lacks is the ability to escape the promoter from different
+    positions.
+    """
+
+    # Stoichiometry setup
+    reaction_setup = ReactionSystemSetupModel_1()
+
+    # Rate constants
+    R = RateConstants()
+
+    # Create the graph
+    G = Model_1_Graph(R, reaction_setup)
+
+    #Plot model graph and write setup log
+    WriteGraphAndSetup(G, reaction_setup)
+
+    print("Number of model states: {0}".format(len(G.nodes())))
+
+    return G
+
+
 def main():
     # TODO next time: start working with an ITS: generate rates and run
     # simulation. Start getting a feel for the kinetic parameters.
 
-    # What questions will your study answer?
-    # 1) Is the standard kinetic model sufficient to describe transciption
-    # initiation? Noe that (more recent) elongation models add an extra state
-    # not experimentally validated (not Bai's, but ...?) but they are using
-    # kinetic approximations, which rely on steady state approximations (even
-    # Omaguodligd?).
-    # 2) Having shown a correlation with a translocation equilibrium approach,
-    # we wish to see if a kinetic discription of the process can improve
-    # things.
-    # 3) In want of detailed kinetic studies of transcriptiopn initiation with
-    # E. coli RNAP, can we put together the existing knowledge in the
-    # literature to model the process from what is known from ensemble snapshot
-    # studies?
+    # TODO next time: start specifying several models. You are going to
+    # investigate increasingly complex models to evaluate their individual
+    # usefullness. You'll need an easy way to specify models and rate
+    # coefficients so that it is perfectly clear which model you are using and
+    # which rate coefficients
 
-    # Will you be able to distinguish between models? What will be the value?
-    # What is the question? Is the standard Pre<->post->nuc model sufficient to
-    # describe the process? Some use simpler models (Patel, Malinen) others add
-    # a new state. The addition of a new state may be because of lack of
-    # sequence-dependent fitting.
+    # XXX two ways of doing this. 1) make a sufficiently complex single class
+    # that can generate all these models given basic instructions. 2) make one
+    # class per model. If you have different variants of each model, such as
+    # different regimes for finding the rate coefficients, these can be named 1a, 1b, 1c.
+    # I think alternative 2) is the best.
 
     # What should influence the different rates
     # Forward translocation: #1 Malinen, #2 RNA-DNA/DNA-DNA, #3 length-dependent, #4 constant
-    # Reverse translocation: #1 Malinen/Hein, #2 constant
+    # Reverse translocation: #1 Malinen/Hein, #2 constant, #3 RNA-DNA/DNA-DNA
     # Nucleotide addition #1 Malinen, #2 constant
-    #
-    #
+    # Entry into backtracked state: #1 constant (ala Patel), #2 length-dependent, #DNA-DNA (scrunch)
+    # Rate of backtracking #1 constant, 2# RNA-DNA energy; 3# length-dependent (hybrid)
 
-    # create a setup
-    reaction_setup = ReactionSystemSetup()
-    # Rates object to calculate reaction rates for a given
-    R = RateConstants()
-    G = InitialTranscriptionReactionGraph(R, reaction_setup)
+    model_1_G = CreateModel_1_Graph()
+    debug()
 
-    reaction_system, initial_values, parameters = GenerateInput(reaction_setup, R, G)
+    #model_2_G
+
+    # Valid for all directed graphs with associated rates
+    reaction_system, initial_values, parameters = GenerateInput(model_1_G)
 
     #solver = 'vode'  # 1s setup, 9.5s, 18s, 23s (200, 400, 500 time) solver
     #solver = 'radau'  # 15s setup, 0.26s solver
     solver = 'dopri'  # 5s setup, 0.1s solver, only 10% multiproc speedup
 
     model = BuildModel(reaction_system, parameters, initial_values, solver)
-    trajs = []
-    jobs = []
-    newtime = time.time()
-    pool = Pool(processes=4)
+    trajectory1 = SolveModel(model)
 
-    simtimes = [200, 450, 600, 700, 800, 200, 1000, 300, 346,
-                200, 450, 600, 700, 800, 200, 1000, 300, 346,
-                200, 450, 600, 700, 800, 200, 1000, 300, 346,
-                200, 450, 600, 700, 800, 200, 1000, 300, 346,
-                200, 450, 600, 700, 800, 200, 1000, 300, 346]
+    # When changing the model for parameter estimation, do through set method
+    model.set(tdata=[0, 100])
+    trajectory2 = SolveModel(model)
 
-    # for 45 sequences on 4 cores you get a 1.6x speedup
-    # on 2 cores in ran nearly as fast (5.11 vs 4.22) on 4 cores!
-    # each process completed in 0.11 on 4 cores, but 0.15 on 4 ... there must
-    # be some blocking going on with the compiled code.
-    # with 1 core you ran in 8.8 seconds with multiprocessing, and 5.6 seconds
-    # without. Multiprocessing may be useful if you find other tasks.
-    for simtime in simtimes:
+    CheckConservationOfMass(model_1_G, initial_values, trajectory1)
+    CheckConservationOfMass(model_1_G, initial_values, trajectory2)
 
-        #job = pool.apply_async(SolveModel, args=(model,))
-        #jobs.append(job)
-
-        model.set(tdata=[0, simtime])
-        trajectory = SolveModel(model)
-        CheckConservationOfMass(G, initial_values, trajectory)
-        #PlotTrajectory(trajectory)
-
-    pool.close()
-    pool.join()
-    trajs = [j.get() for j in jobs]
-    [CheckConservationOfMass(G, initial_values, traj) for traj in trajs]
-
-    print('Finished solving all models in {0} seconds'.format(time.time()-newtime))
+    #PlotTrajectoryModel_1(trajectory1)
 
 if __name__ == '__main__':
     main()
