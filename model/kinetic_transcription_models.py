@@ -1,6 +1,7 @@
 from PyDSTool import args, Generator
 from ipdb import set_trace as debug  # NOQA
 from matplotlib.pyplot import ion  # NOQA
+from KineticRateConstants import RateConstants
 import matplotlib.pyplot as plt
 plt.style.use('ggplot')
 import networkx as nx
@@ -9,79 +10,9 @@ from datetime import datetime
 import os
 import numpy as np
 
+
 # Non blocking graphics
 #ion()
-
-
-class RateConstants(object):
-    """
-    Class for providing and calculating rate constants
-
-    For now, this class only returns constants for the rate constants. In the
-    future, it will use duplex length, rna length, number of backtracked steps,
-    etc, to calculate the various rates. A lot of the actual research is going
-    to happen on these rates, so the class must be flexible and powerful.
-    """
-
-    # default all values to nan to avoid missing obvious mistakes
-    def __init__(self, variant='', use_AP=False, forwardtl=0.9, reversetl=0.1, nac=0.2,
-                 abortive=0.2, backtrack=0.3, to_fl=0.7, backstep=0.3, to_open_complex=0.7):
-
-        self.forwardtl = forwardtl
-        self.reversetl = reversetl
-        self.nac = nac
-        self.to_fl = to_fl
-        self.abortive = abortive
-        self.backtrack = backtrack
-        self.backstep = backstep
-        self.to_open_complex = to_open_complex
-
-        self.use_AP = use_AP  # use AP to calculate backstepping rate
-        self.variant = variant
-
-    def Forward(self):
-        return self.forwardtl
-
-    def Reverse(self):
-        return self.reversetl
-
-    def Backtrack(self):
-        return self.backtrack
-
-    def Backstep(self):
-        return self.backstep
-
-    def InstantAbort(self):
-        return self.backstep
-
-    def Nac(self):
-        return self.nac
-
-    def NTP_and_PPi(self):
-        return self.nac
-
-    def ToFL(self):
-        return self.to_fl
-
-    def Abortive(self):
-        return self.abortive
-
-    def FreeRNAPtoOpenComplex(self):
-        return self.to_open_complex
-
-    def FirstStep(self, starting_duplex_length):
-        """
-        The initial step from open complex formation to a conformation with a
-        starting duplex length.
-
-        Method: take a dubious average of the net forward/reverse constants plus the
-        nucleotide addition constants, and the divide this by the number of
-        steps that should be taken. This is a bit wonky, but it does not matter
-        since it is sequence independent.
-        """
-        funky_rate_constant_average = (self.Forward() - self.Reverse() + self.Nac()) / 2.
-        return funky_rate_constant_average / float(starting_duplex_length)
-
 
 def DuplexLength(rna_length, nr_backtracked_steps):
     """
@@ -352,7 +283,7 @@ def NonTranslocationModel_Graph(setup, R, tag):
             if direct_backtrack:
 
                 # In future, this should be AP
-                direct_backtrack_rc = R.Backstep()
+                direct_backtrack_rc = R.Backstep(rna_len)
                 AddReaction(G, direct_backtrack_rc, this, open_complex)
 
             elif backstep_mode:
@@ -360,11 +291,12 @@ def NonTranslocationModel_Graph(setup, R, tag):
                 # Create the backstepped state
                 bs = state_template.format(rna_len, 'b', 's')
 
-                backstep_rc = R.Backstep()
+                backstep_rc = R.Backstep(rna_len)
                 AddReaction(G, backstep_rc, this, bs)
 
-                # Then do the abort step
-                abort_rc = R.InstantAbort()
+                # Then do the abort step from the backstepped state
+                # This may be rna-length dependent
+                abort_rc = R.InstantAbort(rna_len)
                 AddReaction(G, abort_rc, bs, open_complex)
 
             # optional abortive log states
@@ -643,7 +575,7 @@ def ReactionSystemSetup():
     setup['allow_escape'] = True
 
     # Where promoter escape may start from
-    setup['escape_start'] = 3
+    setup['escape_start'] = 12
 
     # RNA length where backtracking may start
     setup['backtrack_start'] = 2
@@ -652,11 +584,11 @@ def ReactionSystemSetup():
     setup['initial_rna_length'] = 0
 
     # escape RNA-length: last point of escape
-    setup['final_escape_RNA_length'] = 5
+    setup['final_escape_RNA_length'] = 12
 
     # RNA-DNA duplex abortive range: abortive release may happen here, either by
     # backtracking to this duplex length or directly from this duplex length
-    setup['abortive_range'] = range(3, 5+1)
+    setup['abortive_range'] = range(3, 12+1)
 
     # minimal duplex length for backtracking until
     # For example, backtracking to a length 1 bp hybrid may be implausible
@@ -987,7 +919,7 @@ def CreateModel_3_Graph(R, tag, setup):
     G = NonTranslocationModel_Graph(setup, R, tag)
 
     #Plot model graph and write setup log
-    WriteGraphAndSetup(G, R, setup, tag, alternative='C')
+    WriteGraphAndSetup(G, setup, tag, alternative='C')
 
     return G
 
@@ -1125,11 +1057,8 @@ def main():
     # Setup
     setup = ReactionSystemSetup()
 
-    # Promoter selection
-    promoter_variant = 'N25'
-
     # Get Rate constants for this promoter variant
-    R = RateConstants(variant=promoter_variant)
+    R = RateConstants(variant='N25', use_AP=True, pos_dep_abortive=True, nac=10)
 
     model_graph = CreateModel_3_Graph(R, 'N25_simple', setup)
 
