@@ -1,7 +1,7 @@
 import os
 import stochpy
 import sys
-sys.path.append('/home/jorgsk/Dropbox/phdproject/kinetic_paper/model')
+sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic_model/model')
 import kinetic_transcription_models as ktm
 from KineticRateConstants import RateConstants
 from ipdb import set_trace as debug  # NOQA

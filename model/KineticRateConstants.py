@@ -1,7 +1,7 @@
 # At first, keep it simple. Add the path to where the ITS and datahandler
 # libraries are.
 import sys
-sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/equilibrium_model')
+sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/transcription_data')
 import data_handler
 from ipdb import set_trace as debug  # NOQA
 
