@@ -55,7 +55,7 @@ def AddReaction(G, rc, from_state, to_state):
     G.add_edge(from_state, to_state, rate_constant_value=rc, rate_constant_name=rc_name)
 
 
-def NonTranslocationModel_Graph(setup, R, tag):
+def NonTranslocationModel_Graph(R, tag, setup):
     """
     Even more simple model of transcription initiation.
     Contains:
@@ -409,20 +409,28 @@ def Model_1_Graph(R, setup):
     return G
 
 
-def ReactionSystemSetup():
+def ReactionSystemSetup(backstep_mode=False, direct_backtrack=False,
+        allow_escape=True, escape_start=12, final_escape_RNA_length=12,
+        abortive_beg=3, abortive_end=12):
     """
     Setup for the reaction system.
 
-    Sets up the stoichiometry of the system. If modified, must re-create model, thus re-compile binary
-    when using C-solvers.
+    Sets up the stoichiometry of the system.
+
+    If you want to simulate a missing nucleotide, for example no nucleotide at
+    +8, use "allow_escape=False" and "final_escape_RNA_length"=8
+
+    The main loop when generating mo
+    For rna_len in range(initial_rna_length, final_escape_RNA_length + 1):
+
     """
     setup = {}
 
     # You can choose not to let the sytem proceed to escape
-    setup['allow_escape'] = True
+    setup['allow_escape'] = allow_escape
 
-    # Where promoter escape may start from
-    setup['escape_start'] = 12
+    # Where promoter escape may start from XXX TODO make rates for this
+    setup['escape_start'] = escape_start
 
     # RNA length where backtracking may start
     setup['backtrack_start'] = 2
@@ -431,11 +439,11 @@ def ReactionSystemSetup():
     setup['initial_rna_length'] = 0
 
     # escape RNA-length: last point of escape
-    setup['final_escape_RNA_length'] = 12
+    setup['final_escape_RNA_length'] = final_escape_RNA_length
 
     # RNA-DNA duplex abortive range: abortive release may happen here, either by
     # backtracking to this duplex length or directly from this duplex length
-    setup['abortive_range'] = range(3, 12+1)
+    setup['abortive_range'] = range(abortive_beg, abortive_end+1)
 
     # minimal duplex length for backtracking until
     # For example, backtracking to a length 1 bp hybrid may be implausible
@@ -443,12 +451,12 @@ def ReactionSystemSetup():
 
     # Direct backtrack: when in "abortive_range", return straight to start
     # NOTE: this disables the "backtrack_start" and "backtrack_until_duplex_len" settings.
-    setup['direct_backtrack'] = True
+    setup['direct_backtrack'] = direct_backtrack
 
     # Backstep mode: when in "abortive_range", go to a backstepped state. From the
     # backstepped state, return straight to start.
     # NOTE: this disables the "backtrack_start" and "backtrack_until_duplex_len" settings.
-    setup['backstep_mode'] = False
+    setup['backstep_mode'] = backstep_mode
 
     # For some setups, it is useful to keep an "abortive log" state which
     # accounts for aborted RNA
@@ -502,7 +510,7 @@ def CreateReactionSystem(G):
     return system
 
 
-def SetInitialValues(G):
+def SetInitialValues(G, initial_RNAP=1):
     """
     Set initial values for all nodes except initial node to 0.
     Start with 1 for initial node.
@@ -517,7 +525,7 @@ def SetInitialValues(G):
     for node, data in G.nodes(data=True):
         if 'initial_node' in data:
             if not initial_found:
-                initial_conditions[node] = 1
+                initial_conditions[node] = initial_RNAP
                 initial_found = True
             else:
                 print('Multiple initials found!')
@@ -594,6 +602,7 @@ def WriteGraphAndSetup(G, reaction_setup, tag, alternative):
     image_path = os.path.join(store_dir, id_text + '.png')
     fig.set_size_inches(17, 8)
     fig.savefig(image_path)
+    plt.close(fig)  # Close to avoid piling up
 
     text_path = os.path.join(store_dir, id_text + '.txt')
     with open(text_path, 'wb') as text_handle:
@@ -643,7 +652,7 @@ def GenerateODEInput(G):
     return reaction_system, initial_values, parameters
 
 
-def GenerateStochasticInput(G):
+def GenerateStochasticInput(G, initial_RNAP=100):
     """
     Create a graph based on the raction setup and rate constants. From the
     graph, obtain the system equations, initial values, and parameters (rate
@@ -654,7 +663,7 @@ def GenerateStochasticInput(G):
     nodes to be called 'initial_node'.
     """
 
-    initial_values = SetInitialValues(G)
+    initial_values = SetInitialValues(G, initial_RNAP)
     parameters = GetParameters(G)
     reactions = GetReactions(G)
 
@@ -740,7 +749,7 @@ def CreateModel_3_Graph(R, tag, setup):
     """
 
     # Create graph
-    G = NonTranslocationModel_Graph(setup, R, tag)
+    G = NonTranslocationModel_Graph(R, tag, setup)
 
     #Plot model graph and write setup log
     WriteGraphAndSetup(G, setup, tag, alternative='C')
@@ -815,7 +824,8 @@ def write_psc(reactions, initial_values, parameters, graph_name):
         lines.append(name + ' = ' + str(value))
 
     # Create output directory
-    write_dir = '/home/jorgsk/Dropbox/phdproject/kinetic_paper/model/psc_files/'
+
+    write_dir = '/home/jorgsk/Dropbox/phdproject/kinetic_paper/input_data/stochastic_psc_input'
     if not os.path.isdir(write_dir):
         os.makedirs(write_dir)
 

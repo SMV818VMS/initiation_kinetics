@@ -1,5 +1,0 @@
-Does trigger loop oscillate between open and closed or does it fold in response
-to NTP binding?
-
-Most recent articles on the trigger loop say that it folds in response to NTP
-binding.

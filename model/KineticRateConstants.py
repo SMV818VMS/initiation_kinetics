@@ -1,7 +1,7 @@
 # At first, keep it simple. Add the path to where the ITS and datahandler
 # libraries are.
 import sys
-sys.path.append('/home/jorgsk/Dropbox/phdproject/hsuVitro')
+sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/equilibrium_model')
 import data_handler
 from ipdb import set_trace as debug  # NOQA
 
@@ -20,8 +20,9 @@ class RateConstants(object):
     1 second? I think so.
     """
 
-    def __init__(self, variant='', use_AP=False, pos_dep_abortive=False, forwardtl=0.9, reversetl=0.1, nac=0.2,
-                 abortive=0.2, backtrack=0.3, to_fl=0.7, backstep=0.3, to_open_complex=0.7):
+    def __init__(self, variant='', use_AP=False, pos_dep_abortive=False,
+                 forwardtl=0.9, reversetl=0.1, nac=0.1, abortive=False,
+                 backtrack=0.3, to_fl=0.7, backstep=0.3, to_open_complex=0.7):
 
         self.forwardtl = forwardtl
         self.reversetl = reversetl
@@ -99,7 +100,10 @@ class RateConstants(object):
         """
         If NAC is 10 bp/s, then abortive release is 30 bp/s? x3 must
         qualify as fast.  """
-        return self.nac * 3
+        if self.abortive is False:
+            return self.nac * 3
+        else:
+            return self.abortive
 
     def Nac(self):
         if self.use_AP:
