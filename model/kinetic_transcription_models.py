@@ -1,166 +1,16 @@
-from PyDSTool import args, Generator
 from ipdb import set_trace as debug  # NOQA
-from matplotlib.pyplot import ion  # NOQA
-from KineticRateConstants import RateConstants
 import matplotlib.pyplot as plt
-plt.style.use('ggplot')
 import networkx as nx
-import time
 from datetime import datetime
 import os
 import numpy as np
 
-
-# Non blocking graphics
-#ion()
 
 def DuplexLength(rna_length, nr_backtracked_steps):
     """
     Duplex length is set to max 10
     """
     return min(rna_length - nr_backtracked_steps, 10)
-
-
-def BasicTranscription():
-    """
-    Basic transcription. Start with len=0 RNA, translocate; add first
-    nucleotide; repeat; promoter escape at len=2 RNA. Direct abortive release possible
-    from the 10 state. Backtracking possible from the 20 state, to a
-    from_2_now_1 state. Abortive release possible from this state.
-
-    Challenge: how to keep track of the amount of aborted stuff? We need to
-    create an extra state: 1al, 2al for abortive _l_og, since this state takes
-    care of logging the amount of abortive product that is being produced. The
-    rate at which abortive RNAs are formed will be the same as the rate at
-    which RNAP aborts. Therefore, the accumulated amount of abortive RNA will
-    be the same as the accumulated amount of abortive RNAP! That means that if
-    X rnap initates transcription, and the final amount of RNAP in state 2a is
-    1.7X, it means that 1.7 times more abortive RNA was formed than the
-    initiating amount of RNAP.
-    """
-
-    # State and parameter logic:
-    # 20 means RNA length 2, pre-translocated state
-    # 21 means RNA length 2, post-translocated state
-    # 201 means RNA length 2, backtracked 1 step from pre-translocated state
-    # 2a means RNA length 2, aborted
-    # FL means full length transcript
-
-    initial_conditions = {'RNAP_00': 1,
-                          'RNAP_01': 0,
-                          'RNAP_10': 0,
-                          'RNAP_1al': 0,
-                          'RNAP_11': 0,
-                          'RNAP_20': 0,
-                          'RNAP_201': 0,
-                          'RNAP_2al': 0,
-                          'RNAP_21': 0,
-                          'RNAP_FL': 0
-                          }
-
-    # Rates
-    forward = 0.9
-    reverse = 0.1
-    nac = 0.2
-    to_fl = 0.7
-    abortive = 0.2
-    backtrack = 0.3
-
-    #abortive_from_10 = 0.2
-    #abortive_from_20 = 0.2
-    #backtrack_from_20_to_201 = 0.3
-    #abortive_from_201 = 0.2
-
-    # These give the releation between the states
-    # All possible relevant state information should be obtainable from the
-    # parameter name: length of RNA, translocation state, and backtracked state.
-    parameters = {
-            'k_00_to_01': forward,
-            'k_01_to_00': reverse,
-            'k_01_to_10': nac,
-
-            'k_10_to_11': forward,
-            'k_10_to_1a': abortive,
-            'k_11_to_10': reverse,
-            'k_11_to_20': nac,
-
-            'k_20_to_21': forward,
-            'k_20_to_2a': abortive,
-            'k_20_to_201': backtrack,
-            'k_201_to_2a': abortive,
-            'k_21_to_20': reverse,
-            'k_21_to_FL': to_fl,
-                  }
-
-    # Reaction system
-    RNAP_00_rhs = 'k_01_to_00*RNAP_01 - k_00_to_01*RNAP_00 '\
-                  '+ k_10_to_1a*RNAP_10 '\
-                  '+ k_20_to_2a*RNAP_20 '\
-                  '+ k_201_to_2a*RNAP_201 '
-
-    RNAP_01_rhs = '-k_01_to_00*RNAP_01 + k_00_to_01*RNAP_00 - k_01_to_10*RNAP_01'
-
-    RNAP_10_rhs = 'k_11_to_10*RNAP_11 - k_10_to_11*RNAP_10 + k_01_to_10*RNAP_01 '\
-                  '-k_10_to_1a*RNAP_10'
-
-    RNAP_11_rhs = '-k_11_to_10*RNAP_11 + k_10_to_11*RNAP_10 - k_11_to_20*RNAP_11'
-
-    RNAP_1al_rhs = 'k_10_to_1a*RNAP_10'
-
-    RNAP_20_rhs = 'k_21_to_20*RNAP_21 - k_20_to_21*RNAP_20 + k_11_to_20*RNAP_11 '\
-                  '-k_20_to_201*RNAP_20 - k_20_to_2a*RNAP_20'
-
-    RNAP_21_rhs = '-k_21_to_20*RNAP_21 + k_20_to_21*RNAP_20 - k_21_to_FL*RNAP_21'
-
-    RNAP_201_rhs = 'k_20_to_201*RNAP_20 - k_201_to_2a*RNAP_201'
-
-    RNAP_2al_rhs = 'k_201_to_2a*RNAP_201 + k_20_to_2a*RNAP_20'
-
-    RNAP_FL_rhs = 'k_21_to_FL*RNAP_21'
-
-    #print RNAP_00_rhs
-    #debug()
-
-    system = {'RNAP_00': RNAP_00_rhs,
-              'RNAP_01': RNAP_01_rhs,
-              'RNAP_10': RNAP_10_rhs,
-              'RNAP_11': RNAP_11_rhs,
-              'RNAP_1al': RNAP_1al_rhs,
-              'RNAP_20': RNAP_20_rhs,
-              'RNAP_21': RNAP_21_rhs,
-              'RNAP_201': RNAP_201_rhs,
-              'RNAP_2al': RNAP_2al_rhs,
-              'RNAP_FL': RNAP_FL_rhs
-              }
-
-    ### Specify the model
-    DSargs = args()
-    DSargs.name = 'Simple_transcription_and_escape'
-    DSargs.ics = initial_conditions
-    DSargs.pars = parameters
-    DSargs.tdata = [0, 150]
-    DSargs.varspecs = system
-
-    # Create the solver object
-    DS = Generator.Vode_ODEsystem(DSargs)
-
-    traj = DS.compute('demo')
-    pts = traj.sample()
-
-    fig, ax = plt.subplots()
-
-    ax.plot(pts['t'], pts['RNAP_00'], label='RNAP_00')
-    ax.plot(pts['t'], pts['RNAP_10'], label='RNAP_10')
-    ax.plot(pts['t'], pts['RNAP_20'], label='RNAP_20')
-    ax.plot(pts['t'], pts['RNAP_1al'], label='RNAP_1a')
-    ax.plot(pts['t'], pts['RNAP_2al'], label='RNAP_2a')
-    ax.plot(pts['t'], pts['RNAP_FL'], label='RNAP_FL')
-    ax.legend(loc='lower right')
-    ax.set_xlabel('t')
-
-    fig.suptitle('Hard coded system')
-
-    plt.show()
 
 
 def QualityCheckModel(backtrack_start, initial_rna_length, final_escape_RNA_length,
@@ -469,9 +319,6 @@ def Model_1_Graph(R, setup):
     # Initialize a graph object
     G = nx.DiGraph()
 
-    # Rate constants
-    R = RateConstants()
-
     # read setup
     allow_escape = setup['allow_escape']
     escape_start = setup['escape_start']
@@ -684,46 +531,6 @@ def SetInitialValues(G):
         return initial_conditions
 
 
-def SolveModel(model):
-
-    t1 = time.time()
-    traj = model.compute('demo')
-    print('Solved model in {0} seconds'.format(time.time()-t1))
-
-    return traj
-
-
-def BuildModel(reaction_system, parameters, initial_conditions, solver):
-    """
-    Create and solve model using PyDSTool.
-    """
-
-    ### Specify the model
-    DSargs = args()
-    DSargs.name = 'Initial_transcription'
-    DSargs.ics = initial_conditions
-    DSargs.pars = parameters
-    DSargs.tdata = [0, 100]
-    DSargs.varspecs = reaction_system
-
-    # Create the solver object
-    t0 = time.time()
-
-    if solver == 'vode':
-        DS = Generator.Vode_ODEsystem(DSargs)
-    elif solver == 'dopri':
-        DS = Generator.Dopri_ODEsystem(DSargs)
-    elif solver == 'radau':
-        DS = Generator.Radau_ODEsystem(DSargs)
-    else:
-        print('Wtf no solver 1/0')
-        1/0
-
-    print('Generated model in {0} seconds'.format(time.time()-t0))
-
-    return DS
-
-
 def GetParameters(G):
     """
     Parse graph to link parameter name with parameter value.
@@ -761,26 +568,6 @@ def CalcNTP(trajectory, starting_amount=30):
     nr_ntp = starting_amount - nr_ntp
 
     return nr_ntp
-
-
-def PlotTrajectoryModel(trajectory, alternative='1A'):
-
-    pts = trajectory.sample()
-    fig, ax = plt.subplots()
-
-    if alternative == '2B':
-        ax.plot(pts['t'], pts['RNAP_fre'], label='RNAP_000')
-
-    ax.plot(pts['t'], pts['RNAP_000'], label='RNAP_000')
-    ax.plot(pts['t'], pts['RNAP_100'], label='RNAP_100')
-    ax.plot(pts['t'], pts['RNAP_200'], label='RNAP_200')
-    ax.plot(pts['t'], pts['RNAP_1al'], label='RNAP_1al')
-    ax.plot(pts['t'], pts['RNAP_2al'], label='RNAP_2al')
-    ax.plot(pts['t'], pts['RNAP_flt'], label='RNAP_FL')
-    ax.legend(loc='lower right')
-    ax.set_xlabel('t')
-
-    plt.show()
 
 
 def WriteGraphAndSetup(G, reaction_setup, tag, alternative):
@@ -835,6 +622,43 @@ def CheckConservationOfMass(G, initial_values, trajectory):
 
     # bar plots with rotated labels?
     #ax.plot(pts['t'], pts['RNAP_000'], label='RNAP_000')
+
+
+def GenerateODEInput(G):
+    """
+    Create a graph based on the raction setup and rate constants. From the
+    graph, obtain the system equations, initial values, and parameters (rate
+    coefficients).
+
+    Requires a directed graph G where each directed node is associated with a
+    'rate_constant_name' and 'rate_constant_value'. Also requires one of the
+    nodes to be called 'initial_node'.
+    """
+
+    # get reaction system, initial conditions, and parameter values
+    reaction_system = CreateReactionSystem(G)
+    initial_values = SetInitialValues(G)
+    parameters = GetParameters(G)
+
+    return reaction_system, initial_values, parameters
+
+
+def GenerateStochasticInput(G):
+    """
+    Create a graph based on the raction setup and rate constants. From the
+    graph, obtain the system equations, initial values, and parameters (rate
+    coefficients).
+
+    Requires a directed graph G where each directed node is associated with a
+    'rate_constant_name' and 'rate_constant_value'. Also requires one of the
+    nodes to be called 'initial_node'.
+    """
+
+    initial_values = SetInitialValues(G)
+    parameters = GetParameters(G)
+    reactions = GetReactions(G)
+
+    return reactions, initial_values, parameters
 
 
 def GenerateInput(G):
@@ -924,26 +748,15 @@ def CreateModel_3_Graph(R, tag, setup):
     return G
 
 
-def CreateModel_2_Graph(alternative='A'):
+def CreateModel_2_Graph(R, alternative='A'):
     """
-    How do I avoid copy-waste code?
-
-    Requirements:
-    * provide some model-specific setups
-    * provide RateConstants
-    * Write the graph
-
-    What are the commonalities? I don't see how to avoid copy waste.
-
-    So far it looks as if you can use the same reaction_setup. However, I think that you will finally
-    want to experiment with different setups for different models. Take that when it comes.
+    So far it looks as if you can use the same reaction_setup. However, I
+    think that you will finally want to experiment with different setups for
+    different models. Take that when it comes.
     """
 
     # Setup
     reaction_setup = ReactionSystemSetup()
-
-    # Get Rate constants
-    R = RateConstants()
 
     # Create graph
     G = Model_2_Graph(reaction_setup, R, alternative=alternative)
@@ -1002,7 +815,7 @@ def write_psc(reactions, initial_values, parameters, graph_name):
         lines.append(name + ' = ' + str(value))
 
     # Create output directory
-    write_dir = 'psc_files'
+    write_dir = '/home/jorgsk/Dropbox/phdproject/kinetic_paper/model/psc_files/'
     if not os.path.isdir(write_dir):
         os.makedirs(write_dir)
 
@@ -1014,63 +827,3 @@ def write_psc(reactions, initial_values, parameters, graph_name):
     handle.close()
 
 
-def SolveODE(reaction_system, parameters, initial_values, model_graph):
-
-    solver = 'vode'  # 1s setup, 9.5s, 18s, 23s (200, 400, 500 time) solver
-    solver = 'radau'  # 15s setup, 0.26s solver # does not work on laptop...
-    solver = 'dopri'  # 5s setup, 0.1s solver, only 10% multiproc speedup
-
-    pdt_model = BuildModel(reaction_system, parameters, initial_values, solver)
-    trajectory = SolveModel(pdt_model)
-
-    #When changing the model for parameter estimation, do through set method
-    pdt_model.set(tdata=[0, 100])
-
-    CheckConservationOfMass(model_graph, initial_values, trajectory)
-
-    #This NTP calculation is actually unrealistic: in reality, the reactions
-    #would have decreased with decreasing [NTP]: here you are assuming Vmax the
-    #whole way.
-    #NTP = CalcNTP(trajectory, starting_amount=30)
-
-    PlotTrajectoryModel(trajectory)
-
-
-def main():
-
-    # What should influence the different rates
-    # Forward translocation: #1 Malinen, #2 RNA-DNA/DNA-DNA, #3 length-dependent, #4 constant
-    # Reverse translocation: #1 Malinen/Hein, #2 constant, #3 RNA-DNA/DNA-DNA
-    # Nucleotide addition #1 Malinen, #2 constant
-    # Entry into backtracked state: #1 constant (ala Patel), #2 length-dependent, #DNA-DNA (scrunch)
-    # Rate of backtracking #1 constant, 2# RNA-DNA energy; 3# length-dependent (hybrid)
-
-    # OR ... the AP :)
-
-    #model_graph = CreateModel_1_Graph()
-    #model_graph = CreateModel_2_Graph(alternative='A')
-    #model_graph = CreateModel_2_Graph(alternative='B')
-
-    # Sorry, I made a model 3 :P This is THE most simple model, without
-    # translocation, without free RNAP.
-
-    # Setup
-    setup = ReactionSystemSetup()
-
-    # Get Rate constants for this promoter variant
-    R = RateConstants(variant='N25', use_AP=True, pos_dep_abortive=True, nac=10)
-
-    model_graph = CreateModel_3_Graph(R, 'N25_simple', setup)
-
-    # Parse the graph to make some nice output
-    reaction_system, reactions, initial_values, parameters = GenerateInput(model_graph)
-
-    # Write a .psc file for the system
-    write_psc(reactions, initial_values, parameters, model_graph.name)
-
-    # Solve ODE sysstem XXX This can be separated out
-    #SolveODE(reaction_system, parameters, initial_values, model_graph)
-
-
-if __name__ == '__main__':
-    main()
