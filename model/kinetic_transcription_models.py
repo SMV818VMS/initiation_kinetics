@@ -55,6 +55,56 @@ def AddReaction(G, rc, from_state, to_state):
     G.add_edge(from_state, to_state, rate_constant_value=rc, rate_constant_name=rc_name)
 
 
+def WriteTemplate(number=False, backstep_state=False, abortive_state=False,
+        full_length=False):
+    """
+    The logic of writing the template. It's horrible. Hoping it will settle
+    into a "just works" code.
+
+    number = False means open complex formation
+    """
+
+    if backstep_state and abortive_state:
+        print("Cant have both")
+        1/0
+
+    # Template string for state variables
+    state_template = 'RNAP{0}{1}{2}'
+
+    entries = []
+
+    if number is False and full_length is False:
+        entries = [0, 0, 0]
+    elif number is False and full_length is True:
+        entries = ['f', 'l', 't']
+    else:
+        # See if there is 1 or 2 digits
+        digits = list(str(number))
+        if len(digits) == 1:
+            dg1 = digits[0]
+            entries.append(dg1)
+            entries.append('_')
+
+        elif len(digits) == 2:
+            dg1, dg2 = digits
+            entries.append(dg1)
+            entries.append(dg2)
+
+        if backstep_state:
+            entries.append('b')
+
+        elif abortive_state:
+            entries.append('a')
+        else:
+            entries.append('_')
+
+    if len(entries) != 3:
+        print("something went wrong here")
+        1/0
+
+    return state_template.format(*entries)
+
+
 def NonTranslocationModel_Graph(R, tag, setup):
     """
     Even more simple model of transcription initiation.
@@ -100,30 +150,30 @@ def NonTranslocationModel_Graph(R, tag, setup):
     QualityCheckModel(backtrack_start, initial_rna_length, final_escape_RNA_length,
                       abortive_range, backtrack_until_duplex_len, escape_start)
 
-    # Template string for state variables
-    state_template = 'RNAP_{0}{1}{2}'
-
     # Create the first reaction step -> from open complex to starting complex
     # Need this because abortive release takes RNAP back to the open complex,
     # but we may wish to model transcription from a 2nt RNA.
-    open_complex = state_template.format(0, 0, 0)
-    starting_complex = MakeStartingComplex(G, initial_rna_length, open_complex, R, state_template)
-    G.add_node(starting_complex, initial_node=True)
+    open_complex = WriteTemplate()
+    G.add_node(open_complex, initial_node=True)
 
     # Create the full length (FL) state
     if allow_escape:
-        full_length = state_template.format('f', 'l', 't')
+        full_length = WriteTemplate(full_length=True)
 
     # Following the growing RNA to explore all possible model states
     for rna_len in range(initial_rna_length, final_escape_RNA_length + 1):
 
-        # This state
-        this = state_template.format(rna_len, 0, 0)
-
         # If RNA length longer than 0, add nucleotide addition cycle
         if rna_len > 0:
 
-            previous = state_template.format(rna_len - 1, 0, 0)
+            # This state
+            this = WriteTemplate(number=rna_len)
+
+            if rna_len == 1:
+                previous = open_complex
+            else:
+                previous = WriteTemplate(number=rna_len-1)
+
             nac_rc = R.Nac()
             AddReaction(G, nac_rc, previous, this)
 
@@ -139,7 +189,7 @@ def NonTranslocationModel_Graph(R, tag, setup):
             elif backstep_mode:
 
                 # Create the backstepped state
-                bs = state_template.format(rna_len, 'b', 's')
+                bs = WriteTemplate(number=rna_len, backstep_state=True)
 
                 backstep_rc = R.Backstep(rna_len)
                 AddReaction(G, backstep_rc, this, bs)
@@ -151,7 +201,7 @@ def NonTranslocationModel_Graph(R, tag, setup):
 
             # optional abortive log states
             if abortive_log:
-                al = state_template.format(rna_len, 'a', 'l')
+                al = WriteTemplate(number=rna_len, abortive_state=True)
                 AddReaction(G, direct_backtrack_rc, this, al)
 
         # if escape is allowed, can happen after escape start
@@ -409,7 +459,7 @@ def Model_1_Graph(R, setup):
     return G
 
 
-def ReactionSystemSetup(backstep_mode=False, direct_backtrack=False,
+def ReactionSystemSetup(backtrack_method='direct', direct_backtrack=False,
         allow_escape=True, escape_start=12, final_escape_RNA_length=12,
         abortive_beg=3, abortive_end=12):
     """
@@ -449,14 +499,23 @@ def ReactionSystemSetup(backstep_mode=False, direct_backtrack=False,
     # For example, backtracking to a length 1 bp hybrid may be implausible
     setup['backtrack_until_duplex_len'] = 2
 
-    # Direct backtrack: when in "abortive_range", return straight to start
-    # NOTE: this disables the "backtrack_start" and "backtrack_until_duplex_len" settings.
-    setup['direct_backtrack'] = direct_backtrack
+    if backtrack_method == 'direct':
+        # Direct backtrack: when in "abortive_range", return straight to start
+        # NOTE: this disables the "backtrack_start" and "backtrack_until_duplex_len" settings.
+        setup['direct_backtrack'] = True
+        setup['backstep_mode'] = False
 
-    # Backstep mode: when in "abortive_range", go to a backstepped state. From the
-    # backstepped state, return straight to start.
-    # NOTE: this disables the "backtrack_start" and "backtrack_until_duplex_len" settings.
-    setup['backstep_mode'] = backstep_mode
+    elif backtrack_method == 'backstep':
+        # Backstep mode: when in "abortive_range", go to a backstepped state. From the
+        # backstepped state, return straight to start.
+        # NOTE: this disables the "backtrack_start" and "backtrack_until_duplex_len" settings.
+        setup['backstep_mode'] = True
+        setup['direct_backtrack'] = False
+
+    elif backtrack_method == 'RNA_length_dependent':
+        print("Under construction!")
+    else:
+        print("You have to choose one.")
 
     # For some setups, it is useful to keep an "abortive log" state which
     # accounts for aborted RNA
