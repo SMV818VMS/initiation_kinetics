@@ -22,7 +22,8 @@ class RateConstants(object):
 
     def __init__(self, variant='', use_AP=False, pos_dep_abortive=False,
                  forwardtl=0.9, reversetl=0.1, nac=0.1, abortive=False,
-                 backtrack=0.3, to_fl=0.7, backstep=0.3, to_open_complex=0.7):
+                 backtrack=0.3, to_fl=0.7, backstep=0.3, to_open_complex=0.7,
+                 dataset=False):
 
         self.forwardtl = forwardtl
         self.reversetl = reversetl
@@ -39,8 +40,13 @@ class RateConstants(object):
 
         if variant != '':
             # Read data from the DG100 library
-            dg100 = data_handler.ReadData('dg100-new')
-            self.itso = [i for i in dg100 if i.name == variant][0]
+            # Optionally supply this directly to avoid reading from disk
+            # excessively
+            if dataset is False:
+                dset = data_handler.ReadData('dg100-new')
+            else:
+                dset = dataset
+            self.itso = [i for i in dset if i.name == variant][0]
             # Recall: index 0 corresponds to 2nt RNA
             self.abortive_prob = self.itso.abortiveProb
             # interesting: there is a very low amount of AP for positions 12
@@ -85,7 +91,7 @@ class RateConstants(object):
 
                 ap = self._GetAP(rna_length)
 
-                if 0 < ap < 1:
+                if 0 <= ap <= 1:
                     # If nac rate coefficient is 10/s and AP is 30% at this point,
                     # then backstep rate coefficient is 3/s
                     return ap * self._GetNAC(rna_length)

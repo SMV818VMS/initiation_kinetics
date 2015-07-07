@@ -461,7 +461,7 @@ def Model_1_Graph(R, setup):
 
 def ReactionSystemSetup(backtrack_method='direct', direct_backtrack=False,
         allow_escape=True, escape_start=12, final_escape_RNA_length=12,
-        abortive_beg=3, abortive_end=12):
+        abortive_beg=2, abortive_end=12):
     """
     Setup for the reaction system.
 
@@ -628,7 +628,7 @@ def CalcNTP(trajectory, starting_amount=30):
             nr_ntp = nr_ntp + pts[state_name] * abortive_length
 
         # add nucleotides from full length
-        transcript_length = 74
+        transcript_length = 64
         if state_name.endswith('flt'):
             nr_ntp = nr_ntp + pts[state_name] * transcript_length
 
@@ -657,6 +657,7 @@ def WriteGraphAndSetup(G, reaction_setup, tag, alternative):
     else:
         beg = '0'
 
+    tag = tag.replace('/', '-')
     id_text = tag + alternative + '_' + beg + '_' + time_tag
     image_path = os.path.join(store_dir, id_text + '.png')
     fig.set_size_inches(17, 8)
@@ -727,31 +728,6 @@ def GenerateStochasticInput(G, initial_RNAP=100):
     reactions = GetReactions(G)
 
     return reactions, initial_values, parameters
-
-
-def GenerateInput(G):
-    """
-    Create a graph based on the raction setup and rate constants. From the
-    graph, obtain the system equations, initial values, and parameters (rate
-    coefficients).
-
-    Requires a directed graph G where each directed node is associated with a
-    'rate_constant_name' and 'rate_constant_value'. Also requires one of the
-    nodes to be called 'initial_node'.
-
-    This method is agnostic towards how the graph is crated.
-
-    I see that programatically this is a weird function. Why not just call
-    each function below separtely? in the main program?
-    """
-
-    # get reaction system, initial conditions, and parameter values
-    reaction_system = CreateReactionSystem(G)
-    initial_values = SetInitialValues(G)
-    parameters = GetParameters(G)
-    reactions = GetReactions(G)
-
-    return reaction_system, reactions, initial_values, parameters
 
 
 def GetReactions(G):
@@ -834,7 +810,7 @@ def CreateModel_2_Graph(R, alternative='A'):
     return G
 
 
-def write_psc(reactions, initial_values, parameters, graph_name):
+def write_psc(reactions, initial_values, parameters, graph_name, write_dir):
     """
     Ecample of .psc format:
 
@@ -883,8 +859,6 @@ def write_psc(reactions, initial_values, parameters, graph_name):
         lines.append(name + ' = ' + str(value))
 
     # Create output directory
-
-    write_dir = '/home/jorgsk/Dropbox/phdproject/kinetic_paper/input_data/stochastic_psc_input'
     if not os.path.isdir(write_dir):
         os.makedirs(write_dir)
 
