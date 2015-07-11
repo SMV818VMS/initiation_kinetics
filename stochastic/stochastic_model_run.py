@@ -2,7 +2,7 @@ import os
 import stochpy
 stochpy.plt.switch_backend('Agg')
 import sys
-sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic_model/model')
+sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/model')
 import kinetic_transcription_models as ktm
 from KineticRateConstants import RateConstants
 from ipdb import set_trace as debug  # NOQA
@@ -22,8 +22,8 @@ class SimSetup(object):
 
 def runStochPy(model_path, end, trajectories=1, method='direct'):
     """
-         Only for StochPy:
-         - *method* [default='Direct'] stochastic algorithm (Direct, FRM, NRM, TauLeaping)
+     Only for StochPy:
+     - *method* [default='Direct'] stochastic algorithm (Direct, FRM, NRM, TauLeaping)
     """
 
     mod = stochpy.SSA(IsInteractive=False)
@@ -58,7 +58,7 @@ def Run(model_name, R, reaction_setup, sim_setup):
     ktm.GenerateStochasticInput(model_graph, initial_RNAP=sim_setup.init_RNAP)
 
     # Write a .psc file for the system
-    psc_dir = '/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic_model//input_data/stochastic_psc_input'
+    psc_dir = '/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/input/psc_files'
     ktm.write_psc(reactions, initial_values, parameters, model_name, psc_dir)
 
     model_input = os.path.join(psc_dir, model_name + '.psc')
@@ -107,7 +107,7 @@ def main():
     ktm.GenerateStochasticInput(model_graph, initial_RNAP=100)
 
     # Write a .psc file for the system
-    psc_dir = '/home/jorgsk/Dropbox/phdproject/kinetic_paper/input_data/stochastic_psc_input'
+    psc_dir = '/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/input/'
     ktm.write_psc(reactions, initial_values, parameters, model_name, psc_dir)
 
     model_input = os.path.join(psc_dir, model_name + '.psc')

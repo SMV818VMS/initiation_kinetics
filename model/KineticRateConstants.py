@@ -1,7 +1,7 @@
 # At first, keep it simple. Add the path to where the ITS and datahandler
 # libraries are.
 import sys
-sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/transcription_data')
+sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/data')
 import data_handler
 from ipdb import set_trace as debug  # NOQA
 
@@ -102,14 +102,18 @@ class RateConstants(object):
 
         return backstep
 
-    def InstantAbort(self, rna_length):
+    def InstantAbort(self, rna_length, method):
         """
         If NAC is 10 bp/s, then abortive release is 30 bp/s? x3 must
         qualify as fast.  """
-        if self.abortive is False:
-            return self.nac * 3
+
+        if method == 'simple_length_dependent':
+            return (201 - rna_length*10.)/rna_length
         else:
-            return self.abortive
+            if self.abortive is False:
+                return self.nac * 3
+            else:
+                return self.abortive
 
     def Nac(self):
         if self.use_AP:

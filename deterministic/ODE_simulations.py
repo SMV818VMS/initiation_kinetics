@@ -3,8 +3,8 @@ from PyDSTool import args, Generator
 import matplotlib.pyplot as plt
 plt.style.use('ggplot')
 import sys
-sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic_model/model')
-sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/transcription_data/')
+sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/model')
+sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/')
 import kinetic_transcription_models as ktm
 from KineticRateConstants import RateConstants
 

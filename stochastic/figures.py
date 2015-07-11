@@ -9,8 +9,8 @@ import pandas as pd
 import shelve
 import cPickle as pickle
 import hashlib
-sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/transcription_data/')
-sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic_model/model')
+sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/')
+sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/model')
 import data_handler
 import stochastic_model_run as smr
 import kinetic_transcription_models as ktm
@@ -162,17 +162,40 @@ def naive_initial_transcription_values():
     do_plot_timeseries = False
     plotme = ['RNAP000', 'RNAP8_b', 'RNAPflt']
 
-    #screen = False
-    screen = True
+    screen = False
+    #screen = True
     #subset = ['N25', 'N25-A1anti']
     subset = ['N25']
+    #subset = ['N25-A1anti']
 
     # Keep all rnas to make a box plot after.
     all_rnas = {}
     all_FL_timeseries = {}
 
     # Test making the abortive step dependent on length. How about 21-nt?
-    #length_dep_abortive_step = True
+    abortive_method = 'simple_length_dependent'
+    #abortive_method = False
+    # XXX Mmmh, this did not work at all. Try more extreme. If no luck, turn
+    # to the 2006 data to analyze. Can you get any more info from there? Any
+    # idea about which steps need changing? Do you need to modify the
+    # backtracking probability itself in the end?
+    # Or some other measure? If ou analyze the system, dp you find
+    # out that backtracking rate does not matter at all..? It seems that way
+    # to me right now.
+    # If you decrease to_fl, you reduce the FL-gap, but of course dramatically
+    # increase late abortive release.
+
+    # In conclusion, lengt-dependent abortive release rate has very little
+    # effect. I think this is because the system is deterministic once
+    # backstepped. It's just an intermediate step; it does not matter if it is
+    # slow as long as it is not so slow (< 0.1/s ?) that it causes a prolonged
+    # pause which results in no RNA produced at this location by the time the
+    # simulation has ended. However, if this becomes a major mechanism
+
+    # Hey, you just checked the fold differenece between FL and PY. My god,
+    # the correlation is 0.9, near perfect exponent. So the model works well
+    # for high PY variants, but less well for low PY variants.
+    # What is the difference between low PY variants and high PY variants?
 
     for its in ITSs:
 
@@ -181,12 +204,13 @@ def naive_initial_transcription_values():
             continue
 
         reaction_setup = ktm.ReactionSystemSetup(backtrack_method, escape_start=its.msat,
-                                final_escape_RNA_length=its.msat, abortive_end=its.msat)
+                                                 final_escape_RNA_length=its.msat,
+                                abortive_end=its.msat, abort_method=abortive_method)
 
         rate_constants = RateConstants(variant=its.name, use_AP=True, nac=10,
                                        abortive=10, to_fl=5, dataset=ITSs)
 
-        sim_setup = smr.SimSetup(initial_RNAP=500, nr_trajectories=1, sim_end=180)
+        sim_setup = smr.SimSetup(initial_RNAP=200, nr_trajectories=1, sim_end=180)
 
         setup = {'reaction_setup': reaction_setup,
                  'rate_constants': rate_constants,
@@ -209,6 +233,9 @@ def naive_initial_transcription_values():
             sim = smr.Run(rate_constants.variant, rate_constants, reaction_setup, sim_setup)
             nr_rna = CalculateTranscripts(sim)
             FL_timeseries = GetFLTimeseries(sim)
+            # XXX I just found a bug: you also need to includ the .psc file in
+            # the hdf5 calculation
+
             # Overwrite what's in the database by default
             # Bleh, you keep adding stuff here. You should perhaps consider
             # upgrading. Or making this a dictionary, with version. 'v1' has
@@ -226,12 +253,12 @@ def naive_initial_transcription_values():
         all_FL_timeseries[its.name] = FL_timeseries
 
         # XXX Make the basic bar plots
-        write_bar_plot(nr_rna, its)
+        #write_bar_plot(nr_rna, its)
 
     #XXX BOX, BAR, AND PY-distribution PLOTs XXX
     # Divide itss into high and low and analyse
     #dsetmean = np.mean([i.PY for i in ITSs])
-    #for partition in ['low PY', 'high PY', 'all']:
+    for partition in ['low PY', 'high PY', 'all']:
 
         #if partition == 'low PY':
             #low_ITSs = [i for i in ITSs if i.PY < dsetmean]
@@ -241,8 +268,8 @@ def naive_initial_transcription_values():
             #high_ITSs = [i for i in ITSs if i.PY >= dsetmean]
             #write_box_plot(high_ITSs, all_rnas, title=partition)
 
-        #if partition == 'all':
-            #write_box_plot(ITSs, all_rnas, title=partition)
+        if partition == 'all':
+            write_box_plot(ITSs, all_rnas, title=partition)
 
     #XXX NEW AP XXX
     # Calculate AP anew!
@@ -482,14 +509,16 @@ def write_box_plot(ITSs, tses, title=False):
         frac_diff = calc_frac_diff(np.array(pct_values_model), np.array(pct_values_experiment))
         data_frac[its.name] = frac_diff
 
-    box_plot_model_exp(data, data_range, title)
+    #box_plot_model_exp(data, data_range, title)
 
     # XXX NICE!! You see the trend :) It is also more pronounced for low-PY
     # positions. You can choose one (N25?) to show this trend for a single
     # variant, then show this graph. For publication: green/blue for
     # model/experiment and positive negative axes.
     # And it is more pronounced for hi
-    box_plot_model_exp_frac(data_frac, data_range, title)
+    # XXX TODO: try to ignore the data point with MSAT. I think it's heavily
+    # biasing your results, especially for low-py.
+    #box_plot_model_exp_frac(data_frac, data_range, title)
 
     # XXX THE optimal coolest question is: can you make a model that includes
     # some of the known suspects (long pauses, longer backtrack time)? That
@@ -520,9 +549,13 @@ def fold_diff_PY_correlations(ITSs, data_frac):
     PYs = {i.name: i.PY for i in ITSs}
     fold_diff_metric = []
     prod_yield = []
+    fl_fold = []
     for its, folds in data_frac.items():
         early = np.nansum(folds[:5])
         late = np.nansum(folds[5:])
+
+        flf = folds[-1]
+        fl_fold.append(flf)
 
         measure = late - early
         PY = PYs[its]
@@ -531,6 +564,8 @@ def fold_diff_PY_correlations(ITSs, data_frac):
         prod_yield.append(PY)
 
     prod_yield = np.asarray(prod_yield)
+
+    # Fold diff metric
     fold_diff_metric = np.asarray(fold_diff_metric)
     corrs, pvals = spearmanr(prod_yield, fold_diff_metric)
     corrp, pvalp = pearsonr(prod_yield, fold_diff_metric)
@@ -544,6 +579,23 @@ def fold_diff_PY_correlations(ITSs, data_frac):
     f.suptitle(title)
 
     file_name = 'Fold_difference_PY_correlation.pdf'
+
+    file_path = os.path.join(fig_dir1, file_name)
+    f.savefig(file_path, format='pdf')
+
+    ## FL
+    fl = np.asarray(fl_fold)
+    corrs, pvals = spearmanr(prod_yield, fl)
+    f, ax = plt.subplots()
+    ax.scatter(prod_yield*100., fl)
+
+    ax.set_xlabel('PY')
+    ax.set_ylabel('Fold difference model/experiment of percent FL transcript')
+
+    title = 'Model with AP as backtracking probability greatly overestimates FL for low PY variants\n Spearman correlation: {0}'.format(corrs, corrp)
+    f.suptitle(title)
+
+    file_name = 'FL_fold_difference_PY_correlation.pdf'
 
     file_path = os.path.join(fig_dir1, file_name)
     f.savefig(file_path, format='pdf')
@@ -562,7 +614,7 @@ def box_plot_model_exp_frac(data, data_range, title):
     std = mydf_t.std()
     mean = mydf_t.mean()
     colors = ['green' if v > 0 else 'blue' for v in mean]
-    mean.plot(kind='bar', yerr=std, colors=colors, rot=0)
+    mean.plot(kind='bar', yerr=std, color=colors, rot=0)
 
     # Get colors the way y0 want
     import matplotlib.patches as mpatches
@@ -730,6 +782,118 @@ def write_bar_plot(ts, its):
     fig.savefig(file_path, format='pdf')
 
 
+def ITSs2DF(ITSs):
+    """
+    Take your old-as-cows list of ITS objects and make a dataframe instead
+
+    Only when averaging the 3 replicas does it make sense to have signal as 0.
+    After that, it's NAN all the way.
+
+    Although ... you have to make one dataframe for each variable of
+    interest (abortiveProb, rawMean, etc)
+
+    So... in conclusion, perhaps the best method is to prepare functions to
+    take the different arrays of the ITSs and return an approriate pandas
+    dataframe?
+    """
+
+    #data = {}
+    #index = range(2, 21) + ['FL', 'PY']
+    pass
+
+
+def AP_and_pct_values_distributions_DG100():
+
+    #XXX Variants with PY < 2 have greatly overestimated FL in the model
+    # So AP == backtracking probability almost works for high-PY variants
+    # (hunch: because they have less % abortive transcript after +10 and more
+    # before +10? TODO: plot both AP distribution and % transcript
+    ITSs = data_handler.ReadData('dg100-new')
+
+    # XXX Exerci
+
+    ITSs = sorted(ITSs, key=attrgetter('PY'))
+    # distribution for DG100 split for PY = 2
+
+    pymean = np.median(np.asarray([i.PY for i in ITSs]))
+    low_PY = [i for i in ITSs if i.PY < pymean]
+    high_PY = [i for i in ITSs if i.PY > pymean]
+
+    data_AP_mean = {}
+    data_AP_std = {}
+
+    data_pct_mean = {}
+    data_pct_std = {}
+
+    # XXX this dict-stuff is nonsense. You should just get it into a dataframe
+    # and work from there.
+
+    for name, dset in [('Low PY', low_PY), ('High PY', high_PY)]:
+        # FL stats
+        mean_fl = np.mean([i.full_length_pct for i in dset])
+        std_fl = np.std([i.full_length_pct for i in dset])
+        # Abortive stats
+        # Remember to get nans where there is zero!!
+        ar = np.asarray([i.abortive_pct for i in dset])
+        ar[ar<=0.0] = np.nan
+        mean_ab = np.nanmean(ar, axis=0)
+        std_ab = np.nanstd(ar, axis=0)
+
+        data_mean = mean_ab.tolist() + [mean_fl]
+        data_std = std_ab.tolist() + [std_fl]
+
+        data_pct_mean[name] = data_mean
+        data_pct_std[name] = data_std
+
+        # AP stats
+        aps = np.asarray([i.abortiveProb for i in dset])
+        aps[aps<=0.0] = np.nan
+
+        ap_mean = np.nanmean(aps, axis=0)
+        ap_std = np.nanstd(aps, axis=0)
+
+        data_AP_mean[name] = ap_mean * 100.
+        data_AP_std[name] = ap_std * 100.
+
+    # Signal
+    f, ax = plt.subplots()
+    df = pd.DataFrame(data=data_pct_mean, index=range(2,21) + ['FL'])
+    df_err = pd.DataFrame(data=data_pct_std, index=range(2,21) + ['FL'])
+    df.plot(kind='bar', yerr=df_err, ax=ax)
+
+    ax.set_xlabel('ITS position')
+    ax.set_ylabel('% of IQ signal')
+    ax.set_ylim(0, 50)
+    # XXX High PY sums up to 102% average % yield; Low PY sums up to 100.7
+    # Can you find the discrepancy? If it's eveny distributed it's OK, but not
+    # if it's not.
+
+    file_name = 'Percentage_comparison_high_low_PY.pdf'
+    file_path = os.path.join(fig_dir1, file_name)
+    f.suptitle('Percentage of radioactive intensity for high and low PY variants')
+    f.savefig(file_path, format='pdf')
+
+    # AP
+    f, ax = plt.subplots()
+    df = pd.DataFrame(data=data_AP_mean, index=range(2,21))
+    df_err = pd.DataFrame(data=data_AP_std, index=range(2,21))
+    df.plot(kind='bar', yerr=df_err, ax=ax)
+
+    ax.set_xlabel('ITS position')
+    ax.set_ylabel('AP')
+    ax.set_ylim(0, 50)
+
+    # XXX I think that this comparison looks much better with box plots
+    # But the conclusion is that low-PY have higher average AP from +6 to +16
+    # And yet they have higher intensity only at +6 and +7. Is there something
+    # about the AP-calculation here that you need to consider?
+
+    file_name = 'AP_comparison_high_low_PY.pdf'
+    file_path = os.path.join(fig_dir1, file_name)
+    f.suptitle('Abortive probability in high and low PY variants')
+    f.savefig(file_path, format='pdf')
+
+
 def main():
 
     # Distributions of % of IQ units and #RNA
@@ -737,6 +901,7 @@ def main():
 
     # Remember, you are overestimating PY even if there is no recycling. Would
     # recycling lead to higher or lower PY? I'm guessing lower.
+    #AP_and_pct_values_distributions_DG100()
 
 
 if __name__ == '__main__':

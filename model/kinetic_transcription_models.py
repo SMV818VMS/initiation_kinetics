@@ -140,6 +140,7 @@ def NonTranslocationModel_Graph(R, tag, setup):
     direct_backtrack = setup['direct_backtrack']
     backstep_mode = setup['backstep_mode']
     abortive_log = setup['abortive_log']
+    abort_method = setup['abort_method']
 
     if direct_backtrack == backstep_mode:
         print("Either direct backtrack or backstep model must be enabled for \
@@ -196,7 +197,7 @@ def NonTranslocationModel_Graph(R, tag, setup):
 
                 # Then do the abort step from the backstepped state
                 # This may be rna-length dependent
-                abort_rc = R.InstantAbort(rna_len)
+                abort_rc = R.InstantAbort(rna_len, abort_method)
                 AddReaction(G, abort_rc, bs, open_complex)
 
             # optional abortive log states
@@ -461,7 +462,7 @@ def Model_1_Graph(R, setup):
 
 def ReactionSystemSetup(backtrack_method='direct', direct_backtrack=False,
         allow_escape=True, escape_start=12, final_escape_RNA_length=12,
-        abortive_beg=2, abortive_end=12):
+        abortive_beg=2, abortive_end=12, abort_method=False):
     """
     Setup for the reaction system.
 
@@ -520,6 +521,9 @@ def ReactionSystemSetup(backtrack_method='direct', direct_backtrack=False,
     # For some setups, it is useful to keep an "abortive log" state which
     # accounts for aborted RNA
     setup['abortive_log'] = False
+
+    # Can be length dependent
+    setup['abort_method'] = abort_method
 
     return setup
 
