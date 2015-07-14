@@ -46,24 +46,32 @@ class RateConstants(object):
                 dset = data_handler.ReadData('dg100-new')
             else:
                 dset = dataset
-            self.itso = [i for i in dset if i.name == variant][0]
+            its = [i for i in dset if i.name == variant][0]
             # Recall: index 0 corresponds to 2nt RNA
-            self.abortive_prob = self.itso.abortiveProb
+            self.abortive_prob = its.abortiveProb
+            self.unproductive_ap = its.unproductive_ap
             # interesting: there is a very low amount of AP for positions 12
             # 13, and 14, indicating that most RNAP that reach here manage to
             # escape. This also shows that escape may take place later also
             # for N25!
 
-    def _GetAP(self, rna_length):
+    def _GetAP(self, rna_length, unproductive=False):
         if rna_length < 2:
             print("No AP for RNA < 2nt")
             1/0
-        ap = self.abortive_prob[rna_length-2]
+        if unproductive:
+            ap = self.unproductive_ap[rna_length-2]
+        else:
+            ap = self.abortive_prob[rna_length-2]
 
         if ap == 0.0:
             print("Warning: AP is 0 at position {0} for {1}".format(rna_length, self.variant))
 
-        return ap
+        if 0 <= ap <= 1:
+            return ap
+        else:
+            print("AP not number between 0 and 1")
+            #1/0
 
     def _GetNAC(self, rna_length):
         """
@@ -80,7 +88,7 @@ class RateConstants(object):
     def Backtrack(self):
         return self.backtrack
 
-    def Backstep(self, rna_length=-1):
+    def Backstep(self, rna_length=-1, unproductive=False):
 
         # Use abortive probability
         if self.use_AP:
@@ -89,14 +97,9 @@ class RateConstants(object):
                 1/0
             else:
 
-                ap = self._GetAP(rna_length)
+                ap = self._GetAP(rna_length, unproductive)
 
-                if 0 <= ap <= 1:
-                    # If nac rate coefficient is 10/s and AP is 30% at this point,
-                    # then backstep rate coefficient is 3/s
-                    return ap * self._GetNAC(rna_length)
-                else:
-                    print("AP not number between 0 and 1")
+                return ap * self._GetNAC(rna_length)
         else:
             backstep = self.backstep
 

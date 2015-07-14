@@ -55,13 +55,13 @@ def AddReaction(G, rc, from_state, to_state):
     G.add_edge(from_state, to_state, rate_constant_value=rc, rate_constant_name=rc_name)
 
 
-def WriteTemplate(number=False, backstep_state=False, abortive_state=False,
-        full_length=False):
+def WriteTemplate(productive_open_complex=False,
+                  unproductive_open_complex=False, number=False, backstep_state=False,
+                  abortive_state=False, full_length=False, unproductive=False,
+                  unproductive_backstep_state=False):
     """
     The logic of writing the template. It's horrible. Hoping it will settle
     into a "just works" code.
-
-    number = False means open complex formation
     """
 
     if backstep_state and abortive_state:
@@ -73,30 +73,38 @@ def WriteTemplate(number=False, backstep_state=False, abortive_state=False,
 
     entries = []
 
-    if number is False and full_length is False:
-        entries = [0, 0, 0]
-    elif number is False and full_length is True:
+    if productive_open_complex:
+        entries = ['p', 'o', 'c']
+    elif unproductive_open_complex:
+        entries = ['u', 'o', 'c']
+    elif full_length:
         entries = ['f', 'l', 't']
     else:
-        # See if there is 1 or 2 digits
-        digits = list(str(number))
-        if len(digits) == 1:
-            dg1 = digits[0]
-            entries.append(dg1)
-            entries.append('_')
+        if number:
+            # See if there is 1 or 2 digits
+            digits = list(str(number))
+            if len(digits) == 1:
+                dg1 = digits[0]
+                entries.append(dg1)
+                entries.append('_')
 
-        elif len(digits) == 2:
-            dg1, dg2 = digits
-            entries.append(dg1)
-            entries.append(dg2)
+            elif len(digits) == 2:
+                dg1, dg2 = digits
+                entries.append(dg1)
+                entries.append(dg2)
 
-        if backstep_state:
-            entries.append('b')
-
-        elif abortive_state:
-            entries.append('a')
+            if backstep_state:
+                entries.append('b')
+            elif abortive_state:
+                entries.append('a')
+            elif unproductive:
+                entries.append('u')
+            elif unproductive_backstep_state:
+                entries.append('f')
+            else:
+                entries.append('_')
         else:
-            entries.append('_')
+            print('Must provide rna-length or open complex or full length!')
 
     if len(entries) != 3:
         print("something went wrong here")
@@ -122,9 +130,20 @@ def NonTranslocationModel_Graph(R, tag, setup):
     Promoter escape -> full length transcript state: RNAP_flt
 
     Examples of RNAP in different states:
-    500 : len 5 duplex
+    5__ : len 5 complex
+    5_u : len 5 unproductive complex
+    5_b : len 5 backstepped complex
+    5_f : len 5 unproductive backstepped complex
+
+    15_ : len 15 complex
+    15u : len 15 unproductive complex
+    15b : len 15 backstepped complex
+    15f : len 15 unproductive backstepped complex
+
     5al : proxy for aborted RNA of length 5
     flt : full length transcript
+    poc : productive open complex
+    uoc : unproductive open complex
     """
 
     # Initialize a graph object
@@ -141,10 +160,19 @@ def NonTranslocationModel_Graph(R, tag, setup):
     backstep_mode = setup['backstep_mode']
     abortive_log = setup['abortive_log']
     abort_method = setup['abort_method']
+    unproductive = setup['unproductive']
+    unproductive_only = setup['unproductive_only']
+
+    # Unproductive complexes do not escape
+    if unproductive_only:
+        allow_escape = False
 
     if direct_backtrack == backstep_mode:
         print("Either direct backtrack or backstep model must be enabled for \
                 the simple non-translocation model")
+        1/0
+    if unproductive_only and unproductive:
+        print("Mismatch in unproductive settings")
         1/0
 
     ## QA on setup
@@ -154,11 +182,16 @@ def NonTranslocationModel_Graph(R, tag, setup):
     # Create the first reaction step -> from open complex to starting complex
     # Need this because abortive release takes RNAP back to the open complex,
     # but we may wish to model transcription from a 2nt RNA.
-    open_complex = WriteTemplate()
-    G.add_node(open_complex, initial_node=True)
+    if not unproductive_only:
+        open_complex = WriteTemplate(productive_open_complex=True)
+        G.add_node(open_complex, initial_node_productive=True)
+
+    if unproductive or unproductive_only:
+        open_complex_unprod = WriteTemplate(unproductive_open_complex=True)
+        G.add_node(open_complex_unprod, initial_node_unproductive=True)
 
     # Create the full length (FL) state
-    if allow_escape:
+    if allow_escape and not unproductive_only:
         full_length = WriteTemplate(full_length=True)
 
     # Following the growing RNA to explore all possible model states
@@ -168,37 +201,62 @@ def NonTranslocationModel_Graph(R, tag, setup):
         if rna_len > 0:
 
             # This state
-            this = WriteTemplate(number=rna_len)
+            if not unproductive_only:
+                this = WriteTemplate(number=rna_len)
+
+            if unproductive or unproductive_only:
+                this_unprod = WriteTemplate(number=rna_len, unproductive=True)
 
             if rna_len == 1:
-                previous = open_complex
+                if not unproductive_only:
+                    previous_prod = open_complex
+
+                if unproductive or unproductive_only:
+                    previous_unprod = open_complex_unprod
             else:
-                previous = WriteTemplate(number=rna_len-1)
+                if not unproductive_only:
+                    previous_prod = WriteTemplate(number=rna_len-1)
+
+                if unproductive or unproductive_only:
+                    previous_unprod = WriteTemplate(number=rna_len-1, unproductive=True)
 
             nac_rc = R.Nac()
-            AddReaction(G, nac_rc, previous, this)
 
-        # If into the abortive range, set up instant abort
+            if not unproductive_only:
+                AddReaction(G, nac_rc, previous_prod, this)
+
+            if unproductive or unproductive_only:
+                AddReaction(G, nac_rc, previous_unprod, this_unprod)
+
+        # If into the abortive range, apply (backtracking) and abort
         if rna_len in abortive_range:
 
             if direct_backtrack:
 
-                # In future, this should be AP
-                direct_backtrack_rc = R.Backstep(rna_len)
-                AddReaction(G, direct_backtrack_rc, this, open_complex)
+                if not unproductive_only:
+                    direct_backtrack_rc = R.Backstep(rna_len)
+                    AddReaction(G, direct_backtrack_rc, this, open_complex)
+
+                if unproductive or unproductive_only:
+                    db_unprod_rc = R.Backstep(rna_len, unproductive=True)
+                    AddReaction(G, db_unprod_rc, this_unprod, open_complex_unprod)
 
             elif backstep_mode:
 
                 # Create the backstepped state
-                bs = WriteTemplate(number=rna_len, backstep_state=True)
-
-                backstep_rc = R.Backstep(rna_len)
-                AddReaction(G, backstep_rc, this, bs)
-
-                # Then do the abort step from the backstepped state
-                # This may be rna-length dependent
                 abort_rc = R.InstantAbort(rna_len, abort_method)
-                AddReaction(G, abort_rc, bs, open_complex)
+
+                if not unproductive_only:
+                    bs = WriteTemplate(number=rna_len, backstep_state=True)
+                    backstep_rc = R.Backstep(rna_len)
+                    AddReaction(G, backstep_rc, this, bs)
+                    AddReaction(G, abort_rc, bs, open_complex)
+
+                if unproductive or unproductive_only:
+                    bsu = WriteTemplate(number=rna_len, unproductive_backstep_state=True)
+                    bs_unprod_rc = R.Backstep(rna_len, unproductive=True)
+                    AddReaction(G, bs_unprod_rc, this_unprod, bsu)
+                    AddReaction(G, abort_rc, bsu, open_complex_unprod)
 
             # optional abortive log states
             if abortive_log:
@@ -206,7 +264,7 @@ def NonTranslocationModel_Graph(R, tag, setup):
                 AddReaction(G, direct_backtrack_rc, this, al)
 
         # if escape is allowed, can happen after escape start
-        if allow_escape:
+        if allow_escape and not unproductive_only:
             if rna_len >= escape_start:
                 escape_rc = R.ToFL()
                 AddReaction(G, escape_rc, this, full_length)
@@ -461,8 +519,9 @@ def Model_1_Graph(R, setup):
 
 
 def ReactionSystemSetup(backtrack_method='direct', direct_backtrack=False,
-        allow_escape=True, escape_start=12, final_escape_RNA_length=12,
-        abortive_beg=2, abortive_end=12, abort_method=False):
+                        allow_escape=True, escape_start=12, final_escape_RNA_length=12,
+                        abortive_beg=2, abortive_end=12, abort_method=False,
+                        unproductive=False, unproductive_only=False):
     """
     Setup for the reaction system.
 
@@ -474,8 +533,19 @@ def ReactionSystemSetup(backtrack_method='direct', direct_backtrack=False,
     The main loop when generating mo
     For rna_len in range(initial_rna_length, final_escape_RNA_length + 1):
 
+    The default is only productive RNA synthesis. Then you can specify
+    unproductive (both) or unproductive_only.
+
     """
     setup = {}
+
+    # If this is set, only include the unproductive pathway
+    setup['unproductive_only'] = unproductive_only
+
+    # Include a pathway for unproductive complexes
+    # These have their own forward-pathway and their own abortive
+    # probabilities
+    setup['unproductive'] = unproductive
 
     # You can choose not to let the sytem proceed to escape
     setup['allow_escape'] = allow_escape
@@ -573,7 +643,7 @@ def CreateReactionSystem(G):
     return system
 
 
-def SetInitialValues(G, initial_RNAP=1):
+def SetInitialValues(G, initial_RNAP_prod=100, initial_RNAP_unprod=0):
     """
     Set initial values for all nodes except initial node to 0.
     Start with 1 for initial node.
@@ -582,24 +652,38 @@ def SetInitialValues(G, initial_RNAP=1):
     Dislikes: more than one initial node. Will bark.
     """
 
-    initial_found = False
+    initial_productive_found = False
+    initial_unproductive_found = False
     initial_conditions = {}
 
     for node, data in G.nodes(data=True):
-        if 'initial_node' in data:
-            if not initial_found:
-                initial_conditions[node] = initial_RNAP
-                initial_found = True
+        if 'initial_node_productive' in data:
+            if not initial_productive_found:
+                initial_conditions[node] = initial_RNAP_prod
+                initial_productive_found = True
             else:
-                print('Multiple initials found!')
+                print('Multiple productive initials found!')
+                1/0
+
+        elif 'initial_node_unproductive' in data:
+            if not initial_unproductive_found:
+                initial_conditions[node] = initial_RNAP_unprod
+                initial_unproductive_found = True
+            else:
+                print('Multiple unproductive initials found!')
                 1/0
         else:
             initial_conditions[node] = 0
 
-    if not initial_found:
-        print('No initial nodes found')
-    else:
-        return initial_conditions
+    if initial_RNAP_prod > 0 and not initial_productive_found:
+        print('No initial productive node found!')
+        1/0
+
+    if initial_RNAP_unprod > 0 and not initial_unproductive_found:
+        print('No initial unproductive node found!')
+        1/0
+
+    return initial_conditions
 
 
 def GetParameters(G):
@@ -641,7 +725,7 @@ def CalcNTP(trajectory, starting_amount=30):
     return nr_ntp
 
 
-def WriteGraphAndSetup(G, reaction_setup, tag, alternative):
+def WriteGraphAndSetup(G, reaction_setup, tag, alternative, debug=False):
     """
     Write to file an image of the graph and the corresponding setup.
     """
@@ -663,10 +747,17 @@ def WriteGraphAndSetup(G, reaction_setup, tag, alternative):
 
     tag = tag.replace('/', '-')
     id_text = tag + alternative + '_' + beg + '_' + time_tag
-    image_path = os.path.join(store_dir, id_text + '.png')
-    fig.set_size_inches(17, 8)
-    fig.savefig(image_path)
-    plt.close(fig)  # Close to avoid piling up
+
+    if debug:
+        image_path = os.path.join(store_dir, id_text + '_highres.pdf')
+        fig.set_size_inches(34, 16)
+
+    else:
+        image_path = os.path.join(store_dir, id_text + '.png')
+        fig.set_size_inches(20, 9)
+
+        fig.savefig(image_path)
+        plt.close(fig)  # Close to avoid piling up
 
     text_path = os.path.join(store_dir, id_text + '.txt')
     with open(text_path, 'wb') as text_handle:
@@ -693,9 +784,6 @@ def CheckConservationOfMass(G, initial_values, trajectory):
     print('Total initial: {0}'.format(total_initial))
     print('Total final: {0}'.format(total_final))
 
-    # bar plots with rotated labels?
-    #ax.plot(pts['t'], pts['RNAP_000'], label='RNAP_000')
-
 
 def GenerateODEInput(G):
     """
@@ -716,7 +804,7 @@ def GenerateODEInput(G):
     return reaction_system, initial_values, parameters
 
 
-def GenerateStochasticInput(G, initial_RNAP=100):
+def GenerateStochasticInput(G, initial_RNAP_prod=100, initial_RNAP_unprod=0):
     """
     Create a graph based on the raction setup and rate constants. From the
     graph, obtain the system equations, initial values, and parameters (rate
@@ -727,7 +815,7 @@ def GenerateStochasticInput(G, initial_RNAP=100):
     nodes to be called 'initial_node'.
     """
 
-    initial_values = SetInitialValues(G, initial_RNAP)
+    initial_values = SetInitialValues(G, initial_RNAP_prod, initial_RNAP_unprod)
     parameters = GetParameters(G)
     reactions = GetReactions(G)
 
@@ -782,7 +870,7 @@ def CreateModel_1_Graph():
     return G
 
 
-def CreateModel_3_Graph(R, tag, setup):
+def CreateModel_3_Graph(R, tag, setup, debug=False):
     """
     This is a model without translocation and without free RNAP.
     """
@@ -791,7 +879,7 @@ def CreateModel_3_Graph(R, tag, setup):
     G = NonTranslocationModel_Graph(R, tag, setup)
 
     #Plot model graph and write setup log
-    WriteGraphAndSetup(G, setup, tag, alternative='C')
+    WriteGraphAndSetup(G, setup, tag, alternative='C', debug=debug)
 
     return G
 

@@ -368,19 +368,37 @@ def plot_timeseries(name, sim, plotme):
     Just plot timeseries data.
     """
 
-    sp_2_label = {'RNAP000': 'Open complex',
-                  'RNAP8_b': '8nt abortive RNA',
-                  'RNAPflt': 'Full length transcript'}
+    sp_2_label = {'RNAPpoc': 'Productive open complex',
+                  'RNAPuoc': 'Unproductive open complex',
+                  'RNAPflt': 'Full length transcript',
+                  'RNAP2_b': '2nt abortive RNA',
+                  'RNAP3_b': '3nt abortive RNA',
+                  'RNAP4_b': '4nt abortive RNA',
+                  'RNAP6_b': '6nt abortive RNA',
+                  'RNAP7_b': '7nt abortive RNA',
+                  'RNAP8_b': '8nt abortive RNA'
+                  }
 
     data = {}
+    simulated_species = sim.data_stochsim.species_labels
+
+    # If no species are specified, plot them all
+    if plotme is False:
+        plotme = simulated_species
+
     for sp_name in plotme:
-        sp_index = sim.data_stochsim.species_labels.index(sp_name)
+
+        # Gracefully skip variables not modelled
+        if sp_name not in simulated_species:
+            continue
+
+        sp_index = simulated_species.index(sp_name)
         sp = np.array(sim.data_stochsim.species, dtype=np.int32)
 
         # FL is additative so we keep the whole timeseries
         # Open complex should just reflect what is provided: number of species
         # at eacah time point
-        if sp_name in ['RNAPflt', 'RNAP000']:
+        if sp_name in ['RNAPflt', 'RNAPpoc', 'RNAPuoc']:
             ts = sp[:, sp_index]
         # But for #RNA, we need to take a the diff after in the backstepped
         # state - before we get instantaneous numbers
@@ -405,11 +423,6 @@ def plot_timeseries(name, sim, plotme):
     #df = df.drop_duplicates()
     # with 3 species dfd it's about 10 times smaller than df
     # Compared to full species array, dfd is 100 times smaller.
-
-    # XXX Just noticed a mistake here. The amount of 7-nt RNA is not
-    # increasing, since this is not an 'end station' in the model: you have to
-    # re-obtain this. You can do that however, using a similar approach as you
-    # do to get the final value.
 
     f, ax = plt.subplots()
     df.plot(ax=ax)
