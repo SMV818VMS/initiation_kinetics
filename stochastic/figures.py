@@ -1,6 +1,3 @@
-"""
-Figures for stochastic simulations.
-"""
 import numpy as np
 from scipy.stats import spearmanr, pearsonr
 import os
@@ -34,26 +31,13 @@ simulation_storage = os.path.join(here, 'storage', 'shelve_storage')
 def CalculateTranscripts(model):
     """
     Get #RNA: aborted and FL. Calculate intensities and PY.
-
-    Mmmh. A big challenge. The StochKit solvers are super fast, but do not
-    save info about transitions (I need to know the flux of species).
-    the timestep. Can you get it to record every timestep? Won't be easy.
-
-    So OK. Estimated run time is about 20 seconds for each simulation (1000
-    RNAPs) if you want to get the exact #RNA. But I don't think you need the
-    exact #RNA for each of your intended use cases.
     """
-
-    # XXX If you disbandon the direct_backtrack method, you will simplify the
-    # steup and you can simplify the code fore calculating #abortive RNA since
-    # you can rely on the backtracked state being present. see plot_timeseries
-    # for how it can be done.
 
     sp = np.array(model.data_stochsim.species, dtype=np.int32)
     lb = model.data_stochsim.species_labels
 
     # open complex index
-    oc_indx = lb.index('RNAP000')
+    oc_indx = lb.index('RNAPpoc')
 
     # full length index (if it exists..?)
     fl_indx = lb.index('RNAPflt')
@@ -123,7 +107,7 @@ def CalculateTranscripts(model):
             continue
 
         # Skip open complex
-        if code == 'RNAP000':
+        if code == 'RNAPpoc':
             continue
 
         # Bleh
@@ -158,8 +142,8 @@ def naive_initial_transcription_values():
 
     use_sim_db = True
     #use_sim_db = False
-    #do_plot_timeseries = True
-    do_plot_timeseries = False
+    do_plot_timeseries = True
+    #do_plot_timeseries = False
     plotme = ['RNAP000', 'RNAP8_b', 'RNAPflt']
 
     screen = False
@@ -173,44 +157,32 @@ def naive_initial_transcription_values():
     all_FL_timeseries = {}
 
     # Test making the abortive step dependent on length. How about 21-nt?
-    abortive_method = 'simple_length_dependent'
-    #abortive_method = False
-    # XXX Mmmh, this did not work at all. Try more extreme. If no luck, turn
-    # to the 2006 data to analyze. Can you get any more info from there? Any
-    # idea about which steps need changing? Do you need to modify the
-    # backtracking probability itself in the end?
-    # Or some other measure? If ou analyze the system, dp you find
-    # out that backtracking rate does not matter at all..? It seems that way
-    # to me right now.
-    # If you decrease to_fl, you reduce the FL-gap, but of course dramatically
-    # increase late abortive release.
+    #abortive_method = 'simple_length_dependent'
+    abortive_method = False
 
-    # In conclusion, lengt-dependent abortive release rate has very little
-    # effect. I think this is because the system is deterministic once
-    # backstepped. It's just an intermediate step; it does not matter if it is
-    # slow as long as it is not so slow (< 0.1/s ?) that it causes a prolonged
-    # pause which results in no RNA produced at this location by the time the
-    # simulation has ended. However, if this becomes a major mechanism
-
-    # Hey, you just checked the fold differenece between FL and PY. My god,
-    # the correlation is 0.9, near perfect exponent. So the model works well
-    # for high PY variants, but less well for low PY variants.
-    # What is the difference between low PY variants and high PY variants?
+    # SHIT! The values are now a perfect match. And the kinetics seems much
+    # better as well. How weird that the previous results have totally
+    # vanished
 
     for its in ITSs:
-
         ## Filter out some specific ones
         if screen and its.name not in subset:
             continue
 
-        reaction_setup = ktm.ReactionSystemSetup(backtrack_method, escape_start=its.msat,
-                                                 final_escape_RNA_length=its.msat,
-                                abortive_end=its.msat, abort_method=abortive_method)
+        # Use an MSAT calculated from the position after which 0.1% of
+        # transcript remains. This makes N25 escape at +14, but is a more fair
+        # method. Alternatively use 1%, and N25 returns to +11, but others
+        # reduce their value.
+        msat = its.calculated_msat
+        reaction_setup = ktm.ReactionSystemSetup(backtrack_method, escape_start=msat,
+                                                 final_escape_RNA_length=msat,
+                                                 abortive_end=msat,
+                                                 abort_method=abortive_method)
 
         rate_constants = RateConstants(variant=its.name, use_AP=True, nac=10,
-                                       abortive=10, to_fl=5, dataset=ITSs)
+                                       abortive=30, to_fl=10, dataset=ITSs)
 
-        sim_setup = smr.SimSetup(initial_RNAP=200, nr_trajectories=1, sim_end=180)
+        sim_setup = smr.SimSetup(initial_RNAP=200, nr_trajectories=1, sim_end=240)
 
         setup = {'reaction_setup': reaction_setup,
                  'rate_constants': rate_constants,
@@ -234,13 +206,9 @@ def naive_initial_transcription_values():
             nr_rna = CalculateTranscripts(sim)
             FL_timeseries = GetFLTimeseries(sim)
             # XXX I just found a bug: you also need to includ the .psc file in
-            # the hdf5 calculation
+            # the hdf5 calculation, otherwise some changes will not be deteted
 
-            # Overwrite what's in the database by default
-            # Bleh, you keep adding stuff here. You should perhaps consider
-            # upgrading. Or making this a dictionary, with version. 'v1' has
-            # only ts. 'v2' has ts and timeseris, 'v3' has ts,... but not now,
-            # it's too early still. Just delete the database :)
+            # Overwrite database for identical hash
             shelve_database[sim_id] = {'nr_rna': nr_rna,
                                        'FL_ts': FL_timeseries}
 
@@ -258,7 +226,7 @@ def naive_initial_transcription_values():
     #XXX BOX, BAR, AND PY-distribution PLOTs XXX
     # Divide itss into high and low and analyse
     #dsetmean = np.mean([i.PY for i in ITSs])
-    for partition in ['low PY', 'high PY', 'all']:
+    #for partition in ['low PY', 'high PY', 'all']:
 
         #if partition == 'low PY':
             #low_ITSs = [i for i in ITSs if i.PY < dsetmean]
@@ -268,8 +236,8 @@ def naive_initial_transcription_values():
             #high_ITSs = [i for i in ITSs if i.PY >= dsetmean]
             #write_box_plot(high_ITSs, all_rnas, title=partition)
 
-        if partition == 'all':
-            write_box_plot(ITSs, all_rnas, title=partition)
+        #if partition == 'all':
+            #write_box_plot(ITSs, all_rnas, title=partition)
 
     #XXX NEW AP XXX
     # Calculate AP anew!
@@ -361,6 +329,7 @@ def AP_recalculated(ITSs, all_rnas):
         file_path = os.path.join(fig_dir1, file_name)
         fig.suptitle(title)
         fig.savefig(file_path, format='pdf')
+        plt.close(fig)
 
 
 def plot_timeseries(name, sim, plotme):
@@ -438,6 +407,9 @@ def plot_timeseries(name, sim, plotme):
     f.tight_layout()
     f.savefig(file_path, format='pdf')
 
+    # Explicitly close figure to save memory
+    plt.close(f)
+
 
 def GetFLTimeseries(sim):
 
@@ -473,7 +445,14 @@ def half_lives(all_FL_timeseries, nr_RNAP):
 
     for its_name, timeseries in all_FL_timeseries.items():
 
-        half_life = timeseries.FL[timeseries.FL==nr_RNAP/2.].index.tolist()[0]
+        hl_index = timeseries.FL[timeseries.FL==nr_RNAP/2.].index.tolist()
+        # For the cases where you don't simulate long enough to reach a half
+        # life
+        if hl_index == []:
+            half_life = np.nan
+        else:
+            half_life = hl_index[0]
+
         data[its_name] = half_life
 
     df = pd.DataFrame(data, index=['t_1/2']).T
@@ -493,6 +472,9 @@ def half_lives(all_FL_timeseries, nr_RNAP):
     f.tight_layout()
     f.savefig(file_path, format='pdf')
 
+    # Explicitly close figure to save memory
+    plt.close(f)
+
 
 def write_box_plot(ITSs, tses, title=False):
     """
@@ -509,14 +491,14 @@ def write_box_plot(ITSs, tses, title=False):
     for its in ITSs:
         # Experiment
         exp_key = '_'.join([its.name, 'experiment'])
-        pct_values_experiment = calc_pct_experiment(its, max_ap_pos=data_range[-1])
-        data[exp_key] = pct_values_experiment + ['experiment']
+        pct_values_experiment = calc_pct_experiment(its)
+        data[exp_key] = pct_values_experiment.tolist() + ['experiment']
 
         # Model
         mod_key = '_'.join([its.name, 'model'])
         ts = tses[its.name]
         pct_values_model = calc_pct_model(ts, data_range)
-        data[mod_key] = pct_values_model + ['model']
+        data[mod_key] = pct_values_model.tolist() + ['model']
 
         # Fractional difference
         frac_diff = calc_frac_diff(np.array(pct_values_model), np.array(pct_values_experiment))
@@ -596,6 +578,9 @@ def fold_diff_PY_correlations(ITSs, data_frac):
     file_path = os.path.join(fig_dir1, file_name)
     f.savefig(file_path, format='pdf')
 
+    # Explicitly close figure to save memory
+    plt.close(f)
+
     ## FL
     fl = np.asarray(fl_fold)
     corrs, pvals = spearmanr(prod_yield, fl)
@@ -612,6 +597,8 @@ def fold_diff_PY_correlations(ITSs, data_frac):
 
     file_path = os.path.join(fig_dir1, file_name)
     f.savefig(file_path, format='pdf')
+
+    plt.close(f)
 
 
 def box_plot_model_exp_frac(data, data_range, title):
@@ -650,6 +637,8 @@ def box_plot_model_exp_frac(data, data_range, title):
     file_path = os.path.join(fig_dir1, file_name)
     f.savefig(file_path, format='pdf')
 
+    plt.close(f)
+
 
 def box_plot_model_exp(data, data_range, title):
 
@@ -675,6 +664,7 @@ def box_plot_model_exp(data, data_range, title):
 
     file_path = os.path.join(fig_dir1, file_name)
     f.savefig(file_path, format='pdf')
+    plt.close(f)
 
 
 def calc_frac_diff(arr1, arr2):
@@ -717,18 +707,14 @@ def rel_diff(ar1, ar2):
     """
 
 
-def calc_pct_experiment(its, max_ap_pos=20):
+def calc_pct_experiment(its):
 
-    # We start with 2nt rna so subtract two; you want 19 values in return
-    raw_abortive_data = its.rawDataMean[:max_ap_pos-1]
-    raw_FL = its.fullLengthMean
+    pct_abortive = its.abortive_pct
+    pct_FL = its.full_length_pct
 
-    total_signal = sum(raw_abortive_data) + raw_FL
+    pct_all_rna = np.append(pct_abortive, pct_FL)
 
-    pct_abortive_signal = raw_abortive_data * 100. / total_signal
-    pct_FL_signal = raw_FL * 100 / total_signal
-
-    return list(pct_abortive_signal) + [pct_FL_signal]
+    return pct_all_rna
 
 
 def calc_pct_model(ts, data_range):
@@ -746,7 +732,7 @@ def calc_pct_model(ts, data_range):
     pct_RNA_model = np.array(RNA_model) * 100. / total_RNA_model
     pct_FL_model = ts['FL'] * 100. / total_RNA_model
 
-    return list(pct_RNA_model) + [pct_FL_model]
+    return np.append(pct_RNA_model, pct_FL_model)
 
 
 def write_bar_plot(ts, its):
@@ -773,7 +759,7 @@ def write_bar_plot(ts, its):
 
     data_range = range(2, 21)
 
-    pct_values_experiment = calc_pct_experiment(its, max_ap_pos=data_range[-1])
+    pct_values_experiment = calc_pct_experiment(its)
     pct_values_model = calc_pct_model(ts, data_range)
 
     # Prepare for making a dataframe
@@ -793,6 +779,7 @@ def write_bar_plot(ts, its):
     file_path = os.path.join(fig_dir1, file_name)
     fig.suptitle('Percentage of IQ units and modelled #RNA')
     fig.savefig(file_path, format='pdf')
+    plt.close(fig)
 
 
 def ITSs2DF(ITSs):
@@ -885,6 +872,7 @@ def AP_and_pct_values_distributions_DG100():
     file_path = os.path.join(fig_dir1, file_name)
     f.suptitle('Percentage of radioactive intensity for high and low PY variants')
     f.savefig(file_path, format='pdf')
+    plt.close(f)
 
     # AP
     f, ax = plt.subplots()
@@ -905,6 +893,7 @@ def AP_and_pct_values_distributions_DG100():
     file_path = os.path.join(fig_dir1, file_name)
     f.suptitle('Abortive probability in high and low PY variants')
     f.savefig(file_path, format='pdf')
+    plt.close(f)
 
 
 def main():
