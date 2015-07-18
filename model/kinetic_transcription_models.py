@@ -58,7 +58,7 @@ def AddReaction(G, rc, from_state, to_state):
 def WriteTemplate(productive_open_complex=False,
                   unproductive_open_complex=False, number=False, backstep_state=False,
                   abortive_state=False, full_length=False, unproductive=False,
-                  unproductive_backstep_state=False):
+                  unproductive_backstep_state=False, elongating=False):
     """
     The logic of writing the template. It's horrible. Hoping it will settle
     into a "just works" code.
@@ -79,6 +79,8 @@ def WriteTemplate(productive_open_complex=False,
         entries = ['u', 'o', 'c']
     elif full_length:
         entries = ['f', 'l', 't']
+    elif elongating:
+        entries = ['e', 'l', 'c']
     else:
         if number:
             # See if there is 1 or 2 digits
@@ -128,6 +130,7 @@ def NonTranslocationModel_Graph(R, tag, setup):
     Y -> 0 ; if abortive log == 'a' ; if backstep mode == 'b'
     Z -> 0 ; if abortive log == 'l' ; if backstep mode == 's'
     Promoter escape -> full length transcript state: RNAP_flt
+    Promoter escape -> Elongating complex -> Full length transcript
 
     Examples of RNAP in different states:
     5__ : len 5 complex
@@ -141,6 +144,7 @@ def NonTranslocationModel_Graph(R, tag, setup):
     15f : len 15 unproductive backstepped complex
 
     5al : proxy for aborted RNA of length 5
+    elc : elongating complex
     flt : full length transcript
     poc : productive open complex
     uoc : unproductive open complex
@@ -193,6 +197,7 @@ def NonTranslocationModel_Graph(R, tag, setup):
     # Create the full length (FL) state
     if allow_escape and not unproductive_only:
         full_length = WriteTemplate(full_length=True)
+        elongating = WriteTemplate(elongating=True)
 
     # Following the growing RNA to explore all possible model states
     for rna_len in range(initial_rna_length, final_escape_RNA_length + 1):
@@ -266,8 +271,12 @@ def NonTranslocationModel_Graph(R, tag, setup):
         # if escape is allowed, can happen after escape start
         if allow_escape and not unproductive_only:
             if rna_len >= escape_start:
-                escape_rc = R.ToFL()
-                AddReaction(G, escape_rc, this, full_length)
+                escape_rc = R.Escape()
+                AddReaction(G, escape_rc, this, elongating)
+
+                # Then add escape to full length
+                fl_rc = R.ToFL()
+                AddReaction(G, fl_rc, elongating, full_length)
 
     return G
 

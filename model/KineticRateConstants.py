@@ -18,12 +18,13 @@ class RateConstants(object):
     We assume 10bp/s to be the standard rate. That means that if nac=10/s and
     AP is 40%, then backstep is 4/s. Will this allow a promoter escape within
     1 second? I think so.
+    Assume 10bp/s from around +15 to + 67, about 50bt -> 10nt/s / 50nt 1/5 = 0.2
     """
 
     def __init__(self, variant='', use_AP=False, pos_dep_abortive=False,
                  forwardtl=0.9, reversetl=0.1, nac=0.1, abortive=False,
-                 backtrack=0.3, to_fl=0.7, backstep=0.3, to_open_complex=0.7,
-                 dataset=False):
+                 backtrack=0.3, to_fl=0.2, backstep=0.3, to_open_complex=0.7,
+                 dataset=False, custom_AP=False, GreB_AP=False, escape=5):
 
         self.forwardtl = forwardtl
         self.reversetl = reversetl
@@ -33,10 +34,14 @@ class RateConstants(object):
         self.backtrack = backtrack
         self.backstep = backstep
         self.to_open_complex = to_open_complex
+        self.escape = escape
 
         self.use_AP = use_AP  # use AP to calculate backstepping rate
         self.position_dependent_abortive_rc = pos_dep_abortive
         self.variant = variant
+
+        self.custom_productive_AP = custom_AP
+        self.GreB_AP = GreB_AP
 
         if variant != '':
             # Read data from the DG100 library
@@ -48,21 +53,23 @@ class RateConstants(object):
                 dset = dataset
             its = [i for i in dset if i.name == variant][0]
             # Recall: index 0 corresponds to 2nt RNA
-            self.abortive_prob = its.abortiveProb
+            self.abortive_prob = its.abortive_prob
             self.unproductive_ap = its.unproductive_ap
-            # interesting: there is a very low amount of AP for positions 12
-            # 13, and 14, indicating that most RNAP that reach here manage to
-            # escape. This also shows that escape may take place later also
-            # for N25!
+            self.greb_abortive_prob = its.abortive_prob_GreB
 
     def _GetAP(self, rna_length, unproductive=False):
+
         if rna_length < 2:
             print("No AP for RNA < 2nt")
             1/0
+
         if unproductive:
             ap = self.unproductive_ap[rna_length-2]
         else:
             ap = self.abortive_prob[rna_length-2]
+
+        if self.GreB_AP:
+            ap = self.greb_abortive_prob[rna_length-2]
 
         if ap == 0.0:
             print("Warning: AP is 0 at position {0} for {1}".format(rna_length, self.variant))
@@ -97,9 +104,21 @@ class RateConstants(object):
                 1/0
             else:
 
-                ap = self._GetAP(rna_length, unproductive)
+                # God your setup is becoming more and more spaghetti
+                if self.custom_productive_AP is False:
+                    ap = self._GetAP(rna_length, unproductive)
+                else:
+                    ap = self.custom_productive_AP[rna_length-2]
 
-                return ap * self._GetNAC(rna_length)
+                nac = self._GetNAC(rna_length)
+
+                # Avoid almost dividing by zero for high AP
+                if ap > 0.95:
+                    r = 50
+                else:
+                    r = nac * ap / (1-ap)
+
+                return r
         else:
             backstep = self.backstep
 
@@ -129,6 +148,9 @@ class RateConstants(object):
 
     def NTP_and_PPi(self):
         return self.nac
+
+    def Escape(self):
+        return self.escape
 
     def ToFL(self):
         return self.to_fl
