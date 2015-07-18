@@ -305,7 +305,7 @@ def AP_recalculated(ITSs, all_rnas):
         index = []
 
         new_AP = calc_AP_anew(transcripts)
-        old_AP = its_dict[its_name].abortiveProb
+        old_AP = its_dict[its_name].abortive_probability
 
         data['AP experiment'] = np.asarray(old_AP) * 100.
         data['AP model'] = np.asarray(new_AP) * 100.
@@ -491,7 +491,7 @@ def write_box_plot(ITSs, tses, title=False):
     for its in ITSs:
         # Experiment
         exp_key = '_'.join([its.name, 'experiment'])
-        pct_values_experiment = calc_pct_experiment(its)
+        pct_values_experiment = pct_experiment(its)
         data[exp_key] = pct_values_experiment.tolist() + ['experiment']
 
         # Model
@@ -701,20 +701,9 @@ def calc_frac_diff(arr1, arr2):
     return np.array(frac_diff)
 
 
-def rel_diff(ar1, ar2):
-    """
-    Return the relative difference in % betwe
-    """
+def pct_experiment(its):
 
-
-def calc_pct_experiment(its):
-
-    pct_abortive = its.abortive_pct
-    pct_FL = its.full_length_pct
-
-    pct_all_rna = np.append(pct_abortive, pct_FL)
-
-    return pct_all_rna
+    return its.fraction * 100
 
 
 def calc_pct_model(ts, data_range):
@@ -759,7 +748,7 @@ def write_bar_plot(ts, its):
 
     data_range = range(2, 21)
 
-    pct_values_experiment = calc_pct_experiment(its)
+    pct_values_experiment = pct_experiment(its)
     pct_values_model = calc_pct_model(ts, data_range)
 
     # Prepare for making a dataframe
@@ -782,80 +771,80 @@ def write_bar_plot(ts, its):
     plt.close(fig)
 
 
-def ITSs2DF(ITSs):
-    """
-    Take your old-as-cows list of ITS objects and make a dataframe instead
-
-    Only when averaging the 3 replicas does it make sense to have signal as 0.
-    After that, it's NAN all the way.
-
-    Although ... you have to make one dataframe for each variable of
-    interest (abortiveProb, rawMean, etc)
-
-    So... in conclusion, perhaps the best method is to prepare functions to
-    take the different arrays of the ITSs and return an approriate pandas
-    dataframe?
-    """
-
-    #data = {}
-    #index = range(2, 21) + ['FL', 'PY']
-    pass
-
-
 def AP_and_pct_values_distributions_DG100():
+    """
+    Plot distributions of AP and %yield for high and low PY variants
 
-    #XXX Variants with PY < 2 have greatly overestimated FL in the model
-    # So AP == backtracking probability almost works for high-PY variants
-    # (hunch: because they have less % abortive transcript after +10 and more
-    # before +10? TODO: plot both AP distribution and % transcript
+    GOOD: differences between methods are not big on average, but there will
+    probably be some big differences for individual promoters.
+    """
+    from operator import attrgetter
+
     ITSs = data_handler.ReadData('dg100-new')
 
-    # XXX Exerci
-
     ITSs = sorted(ITSs, key=attrgetter('PY'))
-    # distribution for DG100 split for PY = 2
 
     pymean = np.median(np.asarray([i.PY for i in ITSs]))
     low_PY = [i for i in ITSs if i.PY < pymean]
     high_PY = [i for i in ITSs if i.PY > pymean]
 
-    data_AP_mean = {}
-    data_AP_std = {}
+    # Make this plot with three different ways of calculating AP
+    abortive_methods = ['abortiveProb_old', 'abortive_prob', 'abortive_prob_first_mean']
 
+    # AP plots
+    for ab_meth in abortive_methods:
+
+        data_AP_mean = {}
+        data_AP_std = {}
+
+        for name, dset in [('Low PY', low_PY), ('High PY', high_PY)]:
+
+            # AP stats
+            f = attrgetter(ab_meth)
+            aps = np.asarray([f(i) for i in dset])
+            aps[aps<=0.0] = np.nan
+
+            ap_mean = np.nanmean(aps, axis=0)
+            ap_std = np.nanstd(aps, axis=0)
+
+            # Old method separated between abortive and FL
+            if ab_meth == 'abortiveProb_old':
+                ap_mean = np.append(ap_mean, 1.)
+                ap_std = np.append(ap_std, 0.)
+
+            data_AP_mean[name] = ap_mean * 100.
+            data_AP_std[name] = ap_std * 100.
+
+        f, ax = plt.subplots()
+        df = pd.DataFrame(data=data_AP_mean, index=range(2,21) + ['FL'])
+        df_err = pd.DataFrame(data=data_AP_std, index=range(2,21) + ['FL'])
+        df.plot(kind='bar', yerr=df_err, ax=ax)
+
+        ax.set_xlabel('ITS position')
+        ax.set_ylabel('AP')
+        ax.set_ylim(0, 60)
+
+        file_name = 'AP_comparison_high_low_PY_{0}.pdf'.format(ab_meth)
+        file_path = os.path.join(fig_dir1, file_name)
+        f.suptitle('Abortive probability in high and low PY variants\n{0}'.format(ab_meth))
+        f.savefig(file_path, format='pdf')
+        plt.close(f)
+
+    # Signal Plots
     data_pct_mean = {}
     data_pct_std = {}
 
-    # XXX this dict-stuff is nonsense. You should just get it into a dataframe
-    # and work from there.
-
     for name, dset in [('Low PY', low_PY), ('High PY', high_PY)]:
-        # FL stats
-        mean_fl = np.mean([i.full_length_pct for i in dset])
-        std_fl = np.std([i.full_length_pct for i in dset])
-        # Abortive stats
-        # Remember to get nans where there is zero!!
-        ar = np.asarray([i.abortive_pct for i in dset])
-        ar[ar<=0.0] = np.nan
-        mean_ab = np.nanmean(ar, axis=0)
-        std_ab = np.nanstd(ar, axis=0)
 
-        data_mean = mean_ab.tolist() + [mean_fl]
-        data_std = std_ab.tolist() + [std_fl]
+        # Remember to get nans where there is zero!!
+        ar = np.asarray([i.fraction * 100. for i in dset])
+        ar[ar<=0.0] = np.nan
+        data_mean = np.nanmean(ar, axis=0)
+        data_std = np.nanstd(ar, axis=0)
 
         data_pct_mean[name] = data_mean
         data_pct_std[name] = data_std
 
-        # AP stats
-        aps = np.asarray([i.abortiveProb for i in dset])
-        aps[aps<=0.0] = np.nan
-
-        ap_mean = np.nanmean(aps, axis=0)
-        ap_std = np.nanstd(aps, axis=0)
-
-        data_AP_mean[name] = ap_mean * 100.
-        data_AP_std[name] = ap_std * 100.
-
-    # Signal
     f, ax = plt.subplots()
     df = pd.DataFrame(data=data_pct_mean, index=range(2,21) + ['FL'])
     df_err = pd.DataFrame(data=data_pct_std, index=range(2,21) + ['FL'])
@@ -864,9 +853,6 @@ def AP_and_pct_values_distributions_DG100():
     ax.set_xlabel('ITS position')
     ax.set_ylabel('% of IQ signal')
     ax.set_ylim(0, 50)
-    # XXX High PY sums up to 102% average % yield; Low PY sums up to 100.7
-    # Can you find the discrepancy? If it's eveny distributed it's OK, but not
-    # if it's not.
 
     file_name = 'Percentage_comparison_high_low_PY.pdf'
     file_path = os.path.join(fig_dir1, file_name)
@@ -874,36 +860,15 @@ def AP_and_pct_values_distributions_DG100():
     f.savefig(file_path, format='pdf')
     plt.close(f)
 
-    # AP
-    f, ax = plt.subplots()
-    df = pd.DataFrame(data=data_AP_mean, index=range(2,21))
-    df_err = pd.DataFrame(data=data_AP_std, index=range(2,21))
-    df.plot(kind='bar', yerr=df_err, ax=ax)
-
-    ax.set_xlabel('ITS position')
-    ax.set_ylabel('AP')
-    ax.set_ylim(0, 50)
-
-    # XXX I think that this comparison looks much better with box plots
-    # But the conclusion is that low-PY have higher average AP from +6 to +16
-    # And yet they have higher intensity only at +6 and +7. Is there something
-    # about the AP-calculation here that you need to consider?
-
-    file_name = 'AP_comparison_high_low_PY.pdf'
-    file_path = os.path.join(fig_dir1, file_name)
-    f.suptitle('Abortive probability in high and low PY variants')
-    f.savefig(file_path, format='pdf')
-    plt.close(f)
-
 
 def main():
 
     # Distributions of % of IQ units and #RNA
-    naive_initial_transcription_values()
+    #naive_initial_transcription_values()
 
     # Remember, you are overestimating PY even if there is no recycling. Would
     # recycling lead to higher or lower PY? I'm guessing lower.
-    #AP_and_pct_values_distributions_DG100()
+    AP_and_pct_values_distributions_DG100()
 
 
 if __name__ == '__main__':
