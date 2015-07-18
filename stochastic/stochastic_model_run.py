@@ -711,14 +711,24 @@ def main():
 
     #revyakin_datafit()
 
-    # TODO after that. Estimate PA for productive complexes. Do parameter
-    # estimation on AP for +2, +3, and +4, those which were shown for N25 to
-    # be affected. For the rest they are so small that you may assume that N25
-    # dominates (but for synthesis to the 10 minute mark?). That's really
-    # tricky.
-    # TODO: after that, imagine that you manage to produce the APs of
-    # productive complexes. Take stock of your situation. Count up the results
-    # you've got and what, if else, more you need.
+    # XXX OK you are running simulations of estimating AP and you're logging
+    # the result. Now you need to get some numbers rolling! You will have to
+    # simulate up to maybe 5 minutes?
+    # XXX OK, to get a good match for the abortive, you seem to need a high AP
+    # for +2, but then you get a poor match for FL.
+    # Things to consider:
+    #   1) add the % of unproductive complexes to the parameter estimation
+    #   process
+    #   2) Consider that the productive APs may be quite different from the
+    #   nonproductive. Consider that for N25 after 0.5 minute, when
+    #   FL_1/2 has been reached, PY is around 35%. I think that when you
+    #   adjust AP, you also have to adjust the fraction of transcripts so that
+    #   full length ends up with more.
+
+    # After getting a bit closer with estimation of the signature of
+    # productive transcripts, take stock of your situation. Count up the
+    # results you've got and what, if else, more you need.
+
     productive_AP_estimate()
 
     #results = 'simple_log.log'
@@ -794,7 +804,7 @@ def make_ap_variation(its_variant, nt_range, adjust_2003_FL):
     initial_vals = get_starting_APs(its_variant, adjust_2003_FL)
 
     # Set up a dictionary of variation: (min, max) and steps
-    vardict = {2: (0.1, 0.5),
+    vardict = {2: (0.5, 0.9),
                3: (0.05, 0.30),
                4: (0.10, 0.30),
                5: (0.02, 0.15),
@@ -832,6 +842,7 @@ def productive_AP_estimate():
     its_variant = 'N25'
     unproductive_pct = 0.10
     initial_RNAP = 100
+    sim_end = 60. * 5
 
     #reaction_setup = ktm.ReactionSystemSetup(backtrack_method, escape_start=14,
                                             #final_escape_RNA_length=14, abortive_end=14,
@@ -858,7 +869,8 @@ def productive_AP_estimate():
 
     log_file = 'productive_AP_estimator.log'
     log_handle = open(log_file, 'w')
-    header = '\t'.join(['Fit'] + ['{0}nt'.format(nt) for nt in nt_range])
+    fits = ['Fit_fraction', 'Fit_FL', 'Fit_ab']
+    header = '\t'.join(fits + ['{0}nt'.format(nt) for nt in nt_range])
     log_handle.write(header + '\n')
 
     # Precalculate this value for comparison with model results
@@ -869,8 +881,8 @@ def productive_AP_estimate():
     m2 = os.path.join(data, 'vo_2003/Fraction_FL_and_abortive_timeseries_method_2.csv')
     N25_kinetic_ts = pd.read_csv(m2, index_col=0)[:10]
 
-    #multiproc = True
-    multiproc = False
+    multiproc = True
+    #multiproc = False
     if multiproc:
         pool = Pool(processes=2)
         results = []
@@ -881,7 +893,7 @@ def productive_AP_estimate():
 
         sim_name = get_sim_name(reaction_setup, its_variant)
 
-        sim_setup = SimSetup(initial_RNAP=initial_RNAP, sim_end=180,
+        sim_setup = SimSetup(initial_RNAP=initial_RNAP, sim_end=sim_end,
                              unproductive_pct=unproductive_pct)
 
         args = sim_name, R, reaction_setup, sim_setup
@@ -894,44 +906,96 @@ def productive_AP_estimate():
             model_RNA_nr, model_ts = Run(*args, **kwargs)
             # Compare the % of final species with the experimentally measured values
             val1 = compare_fraction(model_RNA_nr, experiment_RNA_fraction)
-            val2 = compare_timeseries(N25_kinetic_ts, model_ts)
+            val2, val3 = compare_timeseries(N25_kinetic_ts, model_ts)
 
-            write_AP_estimator_log(log_handle, ap, val1, val2)
+            write_AP_estimator_log(log_handle, ap, val1, val2, val3, nt_range)
 
     if multiproc:
         mRfs = [r.get() for r in results]
         for (model_RNA_nr, model_ts), ap in zip(mRfs, APs):
             val1 = compare_fraction(model_RNA_nr, experiment_RNA_fraction)
-            val2 = compare_timeseries(N25_kinetic_ts, model_ts)
+            val2, val3 = compare_timeseries(N25_kinetic_ts, model_ts)
 
-            write_AP_estimator_log(log_handle, ap, val1, val2)
+            write_AP_estimator_log(log_handle, ap, val1, val2, val3, nt_range)
 
     log_handle.close()
 
 
-def compare_timeseries(model_rna):
+def compare_timeseries(exper, model):
     """
     Use the method with a competitive promoter as kinetic info on N25.
 
     You can compare shape with spearman.
     But you must also compare the distance, to match in time, not just shape.
     """
-    # Get FL timeseries
-    FL_ts = df['FL']
+    # First, make a copy of the experiment dataframe so you don't alter it for
+    # future comparisons.
+    experiment = exper.copy(deep=True)
 
-    # Add up all abortive rna
-    cols = df.columns.tolist()
-    cols.remove('FL')  # acts directly on the list..
-    abortive_ts = df[cols].sum(axis=1)
+    # Add up all abortive rna and add as separate column
+    cols = model.columns.tolist()
+    cols.remove('FL')
+    model['Abortive model'] = model[cols].sum(axis=1)
+    # Then remove the individual rna species columns
+    model.drop(cols, inplace=True, axis=1)
 
-    debug()
-    debug()
+    # Then rename 'FL' to 'FL model'
+    model.rename(columns={'FL': 'FL model'}, inplace=True)
+
+    ren ={'Abortive competitive promoter': 'Abortive experiment',
+          'FL competitive promoter': 'FL experiment'}
+
+    experiment.rename(columns=ren, inplace=True)
+
+    # Convert N25 timeseries to seconds
+    experiment.index = experiment.index * 60.
+
+    # Keep experimental data close to model data
+    experiment = experiment[:model.index[-2]]
+
+    # Normalize N25 timeseries to max abortive RNA
+    experiment = experiment/experiment.max().max()
+
+    # Normalize the model RNA to max abortive RNA
+    model = model/model.max().max()
+
+    # Awesome! You've got them both normalized now. Perfect time to start some
+    # comparisons!!
+    # But, one issue. For the model you've got a lot more data very early.
+    # This is probably not usable.
+
+    # Reindex the model-dataset to the times that are available from the
+    # experimental data.
+
+    # Get the values in the model closest to those in the experiment using
+    # linear interpolation
+    #combined_index = pd.concat([model, experiment]).sort_index().interpolate()
+    joined = pd.concat([model, experiment]).sort_index().\
+              interpolate().reindex(experiment.index)
+
+    f, ax = plt.subplots()
+    joined.plot(ax=ax)
+    f.savefig('justlookatid.pdf')
+
+    distance_FL = np.linalg.norm(abs(joined['FL model'] -
+                                     joined['FL experiment']))
+    distance_ab = np.linalg.norm(abs(joined['Abortive model'] -
+                                     joined['Abortive experiment']))
+
+    return distance_FL, distance_ab
 
 
-def write_AP_estimator_log(handle, ap, fit):
+def write_AP_estimator_log(handle, ap, fit_fraction, fit_ts_FL, fit_ts_ab, nt_range):
     """
+    You got three measures. The fit in terms of final fraction of species; the
+    fit in terms of timeseries of FL product; the fit in terms of timeseries
+    of abortive product.
+
+    I'm sure there are issues with these measures. For example, investigate if
+    there is some time-dependent bias.
     """
-    line = '\t'.join([str(fit)] + [str(a) for a in ap])
+    measures = [str(fit_fraction), str(fit_ts_FL), str(fit_ts_ab)]
+    line = '\t'.join(measures + [str(ap[i]) for i in range(len(nt_range))])
     handle.write(line + '\n')
 
 
@@ -962,7 +1026,7 @@ def get_starting_APs(its_variant, adjust_2003_FL=False):
 
 def compare_fraction(model_RNA_nr, experiment_RNA_fraction):
     """
-    You probably need to improve this measure
+    You probably need to improve this measure.
     """
 
     # Model fraction from #RNA
