@@ -2,12 +2,15 @@ import os
 import stochpy
 stochpy.plt.switch_backend('Agg')
 import sys
-from math import floor
 sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/model')
+sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/data')
+sys.path.append(os.path.join(os.path.dirname(__file__), "parameter_estimation"))
 import kinetic_transcription_models as ktm
-from KineticRateConstants import RateConstants
-from ipdb import set_trace as debug  # NOQA
+from KineticRateConstants import ITRates
+from initial_transcription_model import ITModel, ITSimulationSetup
+from ITSframework import calc_abortive_probability
 
+from ipdb import set_trace as debug  # NOQA
 import numpy as np
 from scipy.linalg import solve
 import pandas as pd
@@ -15,238 +18,9 @@ import matplotlib.pyplot as plt
 import data_handler
 from multiprocessing import Pool
 import seaborn  # NOQA
-import itertools
 
 from scipy.optimize import curve_fit
 import scipy.stats as stats
-
-
-class SimSetup(object):
-    """
-    Setup for stochastic simulation.
-    """
-
-    def __init__(self, initial_RNAP=100, nr_trajectories=1, sim_end=60,
-                 unproductive_pct=0., debug_mode=False):
-
-        self.init_RNAP = initial_RNAP
-        self.nr_traj = nr_trajectories
-        self.sim_end = sim_end
-        self.unprod_pct = unproductive_pct  # if more than 0, simulate unproductive complexes
-        self.debug_mode = debug_mode  # use this to produce especially verbose output
-
-
-def runStochPy(model_path, end, trajectories=1, method='direct'):
-    """
-     Only for StochPy:
-     - *method* [default='Direct'] stochastic algorithm (Direct, FRM, NRM, TauLeaping)
-    """
-
-    mod = stochpy.SSA(IsInteractive=False)
-    model_dir, model_filename = os.path.split(model_path)
-    mod.Model(model_filename, dir=model_dir)
-
-    # When you run this one, you get in return each single timestep when
-    # something happend. From this it is easy to calculate #RNA
-    mod.DoStochSim(end=end, mode='time', trajectories=trajectories)
-
-    # This is fast, but no way to get the #RNA produced.
-    #mod.DoStochKitStochSim(trajectories=1, IsTrackPropensities=True,
-                           #customized_reactions=None, solver=None, keep_stats=True,
-                           #keep_histograms=True, endtime=70)
-
-    return mod
-
-
-def Run(its_variant, R, reaction_setup, sim_setup, return_scrunch=False,
-        return_model_rna=False, return_timeseries_FL_total_abortive=False):
-    """
-    Run stochastic model and return #AbortedRNA and #FL. Is this general
-    enough? Should you also return timeseries? Or perhaps you should just
-    return the model object and let the receiving end decide what to do with
-    it.
-    """
-
-    # Make a graph for the system
-    model_graph = ktm.CreateModel_3_Graph(R, its_variant, reaction_setup,
-                                          sim_setup.debug_mode)
-
-    # From the setup, find how many productive and how many unproductive RNAPs
-    # should be simulated
-    nr_prod_RNAP, nr_unprod_RNAP = calc_nr_RNAPs(reaction_setup, sim_setup)
-
-    # Set initial values and extract values from the graph for simulation
-    reactions, initial_values, parameters = \
-    ktm.GenerateStochasticInput(model_graph, nr_prod_RNAP, nr_unprod_RNAP)
-
-    # Write a .psc file for the system
-    psc_dir = '/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/input/psc_files'
-    ktm.write_psc(reactions, initial_values, parameters, its_variant, psc_dir)
-
-    model_input = os.path.join(psc_dir, its_variant + '.psc')
-
-    model = runStochPy(model_input, trajectories=sim_setup.nr_traj, end=sim_setup.sim_end)
-
-    if return_scrunch:
-        return calc_scrunch_distribution(model, sim_setup.init_RNAP)
-    elif return_model_rna:
-        nr_rna = get_nr_RNA(model)
-        model_ts = calc_timeseries('all_rna', model)
-        return nr_rna, model_ts
-    else:
-        return model
-
-
-def calc_nr_RNAPs(reaction_setup, sim_setup):
-
-    nr_RNAP = sim_setup.init_RNAP
-
-    if reaction_setup['unproductive']:
-        unproductive_pct = sim_setup.unprod_pct
-        assert 0 < unproductive_pct < 1
-        nr_RNAP_unproductive = floor(nr_RNAP * unproductive_pct)
-        nr_RNAP_productive = nr_RNAP - nr_RNAP_unproductive
-
-    elif reaction_setup['unproductive_only']:
-        nr_RNAP_unproductive = nr_RNAP
-        nr_RNAP_productive = 0
-
-    else:
-        nr_RNAP_unproductive = 0
-        nr_RNAP_productive = nr_RNAP
-
-    return nr_RNAP_productive, nr_RNAP_unproductive
-
-
-def species_2_model_name():
-    """
-    
-    """
-
-    organizer = {}
-    for nt in range(2,21):
-        key = 'rna_{0}'.format(nt)
-        if nt < 10:
-            species = ['RNAP{0}_b'.format(nt), 'RNAP{0}_f'.format(nt)]
-        else:
-            species = ['RNAP{0}b'.format(nt), 'RNAP{0}f'.format(nt)]
-
-        organizer[key] = species
-
-    organizer['productive open complex'] = ['RNAPpoc']
-
-    organizer['unproductive open complex'] = ['RNAPuoc']
-
-    organizer['elongating complex'] = ['RNAPelc']
-
-    organizer['FL'] = ['RNAPflt']
-
-    return organizer
-
-
-def calc_timeseries(species_names, sim):
-    """
-    New and improved. Provide the species you want:
-    "productive open complex"
-    "unproductive open complex"
-    "xnt", where x is from 2 to 20
-    "elongating complex"
-    "FL"
-
-    You can pass a single species or a list of species.
-    Pass 'all_rna' to get all rna species.
-
-    TODO reimplement an accepted return code when the requested species names
-    were not part of the simulation.
-    """
-
-    if isinstance(species_names, str):
-        if species_names == 'all_rna':
-            species_names = ['rna_{0}'.format(i) for i in range(2,21)] + ['FL']
-        else:
-            species_names = [species_names]
-
-    model_names = sim.data_stochsim.species_labels
-
-    # Convert data array to int32
-    all_ts = np.array(sim.data_stochsim.species, dtype=np.int32)
-    # ehy, the time array is weird; maybe a bug?
-    #time = sim.data_stochsim.time
-    time = [t[0] for t in sim.data_stochsim.time]
-
-    data = {}
-    for species in species_names:
-
-        ts = parse_model_data(species, all_ts, model_names)
-        data[species] = ts
-
-    df = pd.DataFrame(data=data, index=time)
-
-    return df
-
-
-def parse_model_data(species, all_ts, model_names):
-    """
-    Get the timeseries for the given plot name. This should work regardless of
-    the simulation is with RNAPs that are productive, unproductive, or a combination.
-    """
-
-    sp2model_name = species_2_model_name()
-
-    # The complexes and FL are associated with only 1 name in th model
-    nr_names_in_model = len(sp2model_name[species])
-
-    if nr_names_in_model == 1:
-        model_name = sp2model_name[species][0]
-        if model_name in model_names:
-            sp_index = model_names.index(model_name)
-            ts = all_ts[:, sp_index]
-
-    # If Xnt, there are 2 possible names, both productive and unproductive
-    elif nr_names_in_model == 2:
-        ts = np.zeros(all_ts.shape[0], dtype=np.int32)
-        for model_name in sp2model_name[species]:
-
-            if model_name in model_names:
-                sp_index = model_names.index(model_name)
-                # Find -change in #species each timestep (+1=aborted RNA, -1=backtracked)
-                change = all_ts[:-1,sp_index] - all_ts[1:,sp_index]
-                # Set to zero those values that represent entry into the
-                # backstepped state
-                change[change==-1] = 0
-                # Get timeseries of # abortive RNA
-                cumul = np.cumsum(change)
-                # We lose the first timestep. It's anyway impossive to produce an
-                # abortive RNA in the first timestep. So pad a 0 value to the
-                # array to make it fit with the time index.
-                cumul = np.insert(cumul, 0, 0)
-
-                ts += cumul
-
-    return ts
-
-
-def plot_timeseries_copy(species, sim, sim_name):
-    """
-    Plot timeseries of different molecular species from initial
-    transcription modelling.
-    """
-
-    df = calc_timeseries(species, sim)
-
-    f, ax = plt.subplots()
-    df.plot(ax=ax)
-
-    ax.set_ylabel('# of species')
-    ax.set_xlabel('Time (seconds)')
-
-    file_name = 'Timeseries_{0}.pdf'.format(sim_name)
-
-    f.suptitle('Stochastic simulation of initial transcription for {0}'.format(sim_name))
-    f.tight_layout()
-    f.savefig(file_name, format='pdf')
-
-    plt.close(f)
 
 
 def bai_rates(nuc, NTP, EC):
@@ -337,142 +111,61 @@ def get_estim_parameters(method='manual'):
 
 def revyakin_datafit():
     """
-    Q: First, read the % transcript from Revyakin and see if it differs from Hsu?
-    A: It's similar, but those were for the non-single-molecule studies.
-
-    Result: You get a similar distribution to Revyakin using GreB APs, but you have to set
-    nac/to_fl to 4 or 5.
-
-    Using Hsu AP you also get a good match, but you have to use nac/to_fl of
-    20, which is arguably too high.
-
-    Now the question of forward rate comes into play. So far, you have used
-    10b/s. Now is when you need to implement the results of Bai to get
-    sequence specific rates? How does that improve/deteriorate your result?
-    A: After some fiddling, you've found that 9.5 is a good fit to 100 uM NTP.
-
-    Q: What exactly are the scrunch lifetimes? Are they only considering
-    events without abortive release? If not, wouldn't they have called it
-    abortive cycling lifetime? Fuck, if you can't use this either, then you
-    have to move on :)
-
-    A: They count a scrunch as midpoint of transition 2 to midpoint of transition
-    3. So look at figure S10B. Here you see that the scrunching phase includes
-    movement up and down... but other figures show multiple recursions to the
-    'initial state' -- yes, after full length product has been produced!
-
-    AHA: in their main paper: complexes engaged in abortive cycling were
-    observed to be present in the scrunched state: transitions between the
-    scrunched and unscrunched state havin the extent of unwinding in the open
-    complex were not observed. They infer that forward translocation is fast
-    relative to abortive-product release and unscrunching, and also fast
-    relative to second-scale temporal resolution. At the same time,
-    abortive-product release and unscrunching cannot be very slow either,
-    otherwise it would supposedly have been detected with the 1s temporal
-    resolution?
-
-    The elongation speed seems to be around 10 bp/s. (see last Supplementary
-    figure; Lilian's fragments are neutrally coiled: does it place it
-    somewhere in the middle?)
-
-    You can apply some logic here to estimate the speed of initial
-    transcription. This would be an important result!!! Really, it is.
-    Shortest scrunch-time is measured to be 2.5s (they say 100n, but only show
-    15 points...). If 2.5 is the shortest they measure, we may assume that
-    this corresponds to an abort-free scrunch. This corresponds to a speed of
-    4.5 nt/s. This fits well with the standard model.
-
-    Further, it seems to me that their experiment is not able to distinguish
-    between a +10 and +5 state, so how can they say that unscrunching is slow?
-    It is at least faster than their resolution. So we'll assume that backstep
-    from 10nt RNA and abortive release happens in under 1/s. Also, Margeat
-    cannot identify this even with 400ms resolution. So we are at a conundrum
-    here. That's always good uh?
-
-    Hey, most abortive initiation happens at the +2 position. But, this should
-    look identical to open complex for Revyakin. Then it's kind of weird that
-    no open complex is detected? If AP is 35% for 2nt product, then, it would
-    be expected that even if it goes on at 10/s, that you would occasionally
-    get 10 2nt synthesises in a row, so that one actually spends 1s in the
-    open complex position? I would think so. Nevermind.
-
-    If translocation rate is 5/s, it would take 2 seconds to reach promoter
-    escape. What should abortive release rate be? Half of NAC, so 2.5/s?
-
-    NOW the length-dependent abortive release rate might come into play ... :D
-
-    OR NOT!! With NAC = 10 and abortive =2 you get a pretty damn good match.
     9/9/1.8 is very good.
 
     XXX Show that using GreB - that the optimal rates do not make sense, and
     that they make sense with GreB +
-
-    Can you fit the experimental data to a gamma distribution? And to an
-    exponential distribution?
     """
 
     # Setup
-    backtrack_method = 'backstep'
-    its_variant = 'N25'
+    variant_name = 'N25'
+    ITSs = data_handler.ReadData('dg100-new')
+    its_variant = [i for i in ITSs if i.name == variant_name][0]
     initial_RNAP = 500
-    reaction_setup = ktm.ReactionSystemSetup(backtrack_method, escape_start=14,
-                                            final_escape_RNA_length=14, abortive_end=14,
-                                            abortive_beg=2)
-
-    # We know: NAC should not be faster than 10nt/s and is likely faster than
-    # 2.5 nt/s, since the fastest scrunch involving 11 NACs was reported in
-    # about 2.5 seconds.
-    # We know: abortive should be slower than nac: so less than 10/s, but not
-    # much less than 1/s since it has not been captured by Revyakin.
-    # Fl: less certain: Patel showed less than for nac, but this may be
-    # different for T7, core promoter region, etc.
-
-    # XXX HEY!! You can calculate what NAC needs to be if 20% of scrunches
-    # should be less than 1 second: it will be quite high indeed.
-
-    params = get_estim_parameters(method='uniform')
-    #params = [(9.2, 1.6, 5)]  # the golden params
+    sim_end = 180
+    #params = get_estim_parameters(method='uniform')
+    params = [(9.2, 1.6, 5)]  # the golden params
+    stoi_setup = ktm.ITStoichiometricSetup(escape_RNA_length=12)
 
     log_file = 'simple_log.log'
     log_handle = open(log_file, 'w')
     log_handle.write('Fit\tFit_extrap\tNac\tAbort\tEscape\n')
 
-    plot = False
-    #plot = True
+    #plot = False
+    plot = True
 
-    multiproc = True
-    #multiproc = False
+    #multiproc = True
+    multiproc = False
     if multiproc:
         pool = Pool(processes=2)
         results = []
     for nac, abrt, escape in params:
 
-        R = RateConstants(variant=its_variant, use_AP=True, nac=nac,
-                          abortive=abrt, escape=escape, to_fl=0.2, GreB_AP=True)
+        R = ITRates(its_variant, nac=nac, unscrunch=abrt, escape=escape, GreB_AP=True)
 
-        sim_name = get_sim_name(reaction_setup, its_variant)
+        sim_name = get_sim_name(stoi_setup, its_variant)
 
-        # Now just making sure that sim end is large enough; potentially you'd
-        # want to ignore simulations that take longer than sim_end
-        sim_setup = SimSetup(initial_RNAP=initial_RNAP, sim_end=180)
+        sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end)
 
-        kwargs ={'return_scrunch': True}
-        args = (sim_name, R, reaction_setup, sim_setup)
+        model = ITModel(sim_setup)
+
         if multiproc:
             #r = apply_async(pool, Run, args)
-            r = pool.apply_async(Run, args, kwargs)
+            r = pool.apply_async(model.run)
             results.append(r)
         else:
-            model_scrunches = Run(*args, **kwargs)
+            model_ts = model.run()
+            model_scrunches = calc_scrunch_distribution(model_ts, initial_RNAP)
             plot_and_log_scrunch_comparison(plot, log_handle, model_scrunches,
                                             initial_RNAP, nac, abrt, escape)
 
     if multiproc:
         pool.close()
         pool.join()
-        model_scrunches = [r.get() for r in results]
-        for ms, pars in zip(model_scrunches, params):
+        model_timeseries = [r.get() for r in results]
+        for ts, pars in zip(model_timeseries, params):
             nac, abrt, escape = pars
+            ms = calc_scrunch_distribution(ts, initial_RNAP)
             plot_and_log_scrunch_comparison(plot, log_handle, ms,
                                             initial_RNAP, nac, abrt, escape)
 
@@ -547,7 +240,7 @@ def get_experiment_scrunch_distribution():
     df_gamma = pd.DataFrame(data={'gamma':integrated_prob}, index=gamma_data)
     df_expon = pd.DataFrame(data={'exponential':integrated_prob}, index=expon_data)
 
-    y_model = neg_exp(x, popt[0])
+    #y_model = neg_exp(x, popt[0])
 
     # Make some preductions from this simple model
     xx = np.linspace(0, 40, 1000)
@@ -599,7 +292,7 @@ def compare_scrunch_data(model, experiment, experiment_extrap):
     return distance, distance_extr
 
 
-def calc_scrunch_distribution(sim, initial_RNAP):
+def calc_scrunch_distribution(df, initial_RNAP):
     """
     Will probably not get same distribution in time as Revyakin, but we might
     get the same shape. They use a different salt to the other experiments,
@@ -607,13 +300,13 @@ def calc_scrunch_distribution(sim, initial_RNAP):
     fig in supplementry of Revyakin).
     """
 
-    df = calc_timeseries('FL', sim)
-
     # Starts with timestep 1!
-    escapes = df['FL'][1:] - df['FL'][:-1]
+    # BUT! Your index is now in time; you wish to work on row numbers. Turn
+    # into numpy arrays to avoid index isues.
+    escapes = np.asarray(df['FL'])[1:] - np.asarray(df['FL'])[:-1]
 
     # Skip first timestep
-    time = df.index[1:,0]
+    time = df.index[1:]
     escape_times = time[escapes == 1]
 
     integrated_probability = np.linspace(1, 1/float(initial_RNAP), initial_RNAP)
@@ -708,6 +401,18 @@ def plot_scrunch_distributions(model_scrunches, expt, expt_extrapolated,
 
 
 def main():
+    """
+    ON parameter estimation. You found a good-looking package called SPOTPY
+    which has built-in several methods for parameter estimation, including
+    evolutionary approaches. But in just testing the tutorials, you run into
+    errors. However, it can be a good foundation for you to build your own
+    approach. They are consistently using root mean squared error (RMSE).
+    And they have a way of calculating the 95% confidence interval. If you
+    could do that too it would be awesome.
+
+    So. What to do first? You can refactor the model run. You can make it into
+    a class model_instance = IT(Rates, Blehs, Blahs).
+    """
 
     #revyakin_datafit()
 
@@ -797,128 +502,98 @@ def plot_2003_kinetics():
     f.savefig('2003_kinetics_normalized.pdf')
 
 
-def make_ap_variation(its_variant, nt_range, adjust_2003_FL):
-    """
-    Use the original AP distributions and modify them accordingly
-    """
-    initial_vals = get_starting_APs(its_variant, adjust_2003_FL)
+def start_logger(path, header):
 
-    # Set up a dictionary of variation: (min, max) and steps
-    vardict = {2: (0.5, 0.9),
-               3: (0.05, 0.30),
-               4: (0.10, 0.30),
-               5: (0.02, 0.15),
-               6: (0.10, 0.25),
-               7: (0.02, 0.15),
-               8: (0.30, 0.50),
-               9: (0.20, 0.40),
-               10: (0.20, 0.40),
-               11: (0.01, 0.10),
-               12: (0.01, 0.10),
-               13: (0.01, 0.10),
-               14: (0.01, 0.10),
-               }
-    # How many different values do you want to span?
-    n = 2
+    log_handle = open(path, 'w')
+    log_handle.write(header + '\n')
 
-    variations = [uniform_sample(vardict[nt][0], vardict[nt][1], n) for nt in nt_range]
-    APs = []
-    # Go though all combinations and modify the existing abortive fractions
-    combos = itertools.product(*variations)
-    for var in combos:
-        ap = [i for i in initial_vals]  # make a copy
-        for nt in nt_range:
-            ap[nt-2] = var[nt-2]
-
-        APs.append(ap)
-
-    return APs
+    return log_handle
 
 
 def productive_AP_estimate():
+    """
+    You got it working basically. Now, take a SPOTPY-like approach to wrap
+    parameter sampling and model running and model fitting and parameter
+    analysis so it will be easier to get back to.
+    """
+    from productive_AP_setup import estimator_setup
 
     # Setup
-    backtrack_method = 'backstep'
-    its_variant = 'N25'
-    unproductive_pct = 0.10
-    initial_RNAP = 100
-    sim_end = 60. * 5
+    variant_name = 'N25'
+    ITSs = data_handler.ReadData('dg100-new')
+    its_variant = [i for i in ITSs if i.name == variant_name][0]
+    initial_RNAP = 1000
+    sim_end = 60. * 1.5
 
-    #reaction_setup = ktm.ReactionSystemSetup(backtrack_method, escape_start=14,
-                                            #final_escape_RNA_length=14, abortive_end=14,
-                                            #abortive_beg=2, unproductive_only=True)
+    stoi_setup = ktm.ITStoichiometricSetup(escape_RNA_length=12,
+                                           part_unproductive=True,
+                                           custom_AP=True)
 
-    reaction_setup = ktm.ReactionSystemSetup(backtrack_method, escape_start=14,
-                                            final_escape_RNA_length=14, abortive_end=14,
-                                            abortive_beg=2, unproductive=True)
-
-    #reaction_setup = ktm.ReactionSystemSetup(backtrack_method, escape_start=14,
-                                            #final_escape_RNA_length=14, abortive_end=14,
-                                            #abortive_beg=2)
-
-    # Hey, why are you comparing with the 2003 data? Well, it is to try to use
-    # 10% of nonproductive complexes and see that they continue to produce
-    # abortive transcript in the amount that is observed.
-    # OK, so first plot the 2003 data kthnx.
-
-    # So there are two fits: one for the APs, and another for the timeseries.
-
-    # Only change a few parameters in the beginning.
-    nt_range = range(2, 4)
-    APs = make_ap_variation(its_variant, nt_range, adjust_2003_FL=True)
-
-    log_file = 'productive_AP_estimator.log'
-    log_handle = open(log_file, 'w')
-    fits = ['Fit_fraction', 'Fit_FL', 'Fit_ab']
-    header = '\t'.join(fits + ['{0}nt'.format(nt) for nt in nt_range])
-    log_handle.write(header + '\n')
-
+    R = ITRates(its_variant, nac=9.2, unscrunch=1.6, escape=5)
     # Precalculate this value for comparison with model results
-    experiment_RNA_fraction = get_transcript_fraction(its_variant)
+    experiment_RNA_fraction = its_variant.fraction
+
+    # Get experimental data -- only up to the duration of the simulation
+    N25_kinetic_ts = get_N25_kinetic_data(sim_end)
+
+    estim = estimator_setup(experiment_RNA_fraction, stoi_setup, R, variant_name,
+                    initial_RNAP, sim_end, N25_kinetic_ts)
+
+    params = estim.parameters()
+
+    result = estim.simulation(params)
+
+    #for ap in APs:
+
+        #sim_name = get_sim_name(stoi_setup, its_variant)
+
+        #sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end,
+                                      #unproductive_pct)
+
+        #model = ITModel(sim_setup)
+
+        #if multiproc:
+            #r = pool.apply_async(model.run)
+            #results.append(r)
+        #else:
+            #model_ts = model.run()
+            ## Compare the % of final species with the experimentally measured values
+            #val1 = compare_fraction(model_ts, experiment_RNA_fraction)
+            #val2, val3 = compare_timeseries(N25_kinetic_ts, model_ts)
+
+            #write_AP_estimator_log(log_handle, ap, val1, val2, val3, nt_range)
+
+    #if multiproc:
+        #mRfs = [r.get() for r in results]
+        #for (model_RNA_nr, model_ts), ap in zip(mRfs, APs):
+            #val1 = compare_fraction(model_RNA_nr, experiment_RNA_fraction)
+            #val2, val3 = compare_timeseries(N25_kinetic_ts, model_ts)
+
+            #write_AP_estimator_log(log_handle, ap, val1, val2, val3, nt_range)
+
+    #log_handle.close()
+
+
+def get_N25_kinetic_data(sim_end):
 
     # Fetch kinetic data for N25 for comparison
     data ='/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/'
-    m2 = os.path.join(data, 'vo_2003/Fraction_FL_and_abortive_timeseries_method_2.csv')
-    N25_kinetic_ts = pd.read_csv(m2, index_col=0)[:10]
+    path = os.path.join(data, 'vo_2003/Fraction_FL_and_abortive_timeseries_method_2.csv')
+    ts = pd.read_csv(path, index_col=0)
+    ts.index = ts.index * 60.  # min -> sec
 
-    multiproc = True
-    #multiproc = False
-    if multiproc:
-        pool = Pool(processes=2)
-        results = []
+    # rename columns for later
+    ren ={'Abortive competitive promoter': 'Abortive experiment',
+          'FL competitive promoter': 'FL experiment'}
+    ts.rename(columns=ren, inplace=True)
 
-    for ap in APs:
-        R = RateConstants(variant=its_variant, use_AP=True, nac=9.2, abortive=1.6,
-                          to_fl=5, custom_AP=ap)
+    # let there be 1 timestep more in model than in simulation
+    t = ts[:sim_end-1]
 
-        sim_name = get_sim_name(reaction_setup, its_variant)
+    # Normalize to the largest value
+    t = t / t.max().max()
 
-        sim_setup = SimSetup(initial_RNAP=initial_RNAP, sim_end=sim_end,
-                             unproductive_pct=unproductive_pct)
-
-        args = sim_name, R, reaction_setup, sim_setup
-        kwargs = {'return_model_rna': True,
-                  'return_timeseries_FL_total_abortive': True}
-        if multiproc:
-            r = pool.apply_async(Run, args, kwargs)
-            results.append(r)
-        else:
-            model_RNA_nr, model_ts = Run(*args, **kwargs)
-            # Compare the % of final species with the experimentally measured values
-            val1 = compare_fraction(model_RNA_nr, experiment_RNA_fraction)
-            val2, val3 = compare_timeseries(N25_kinetic_ts, model_ts)
-
-            write_AP_estimator_log(log_handle, ap, val1, val2, val3, nt_range)
-
-    if multiproc:
-        mRfs = [r.get() for r in results]
-        for (model_RNA_nr, model_ts), ap in zip(mRfs, APs):
-            val1 = compare_fraction(model_RNA_nr, experiment_RNA_fraction)
-            val2, val3 = compare_timeseries(N25_kinetic_ts, model_ts)
-
-            write_AP_estimator_log(log_handle, ap, val1, val2, val3, nt_range)
-
-    log_handle.close()
+    return t
 
 
 def compare_timeseries(exper, model):
@@ -1016,7 +691,7 @@ def get_starting_APs(its_variant, adjust_2003_FL=False):
 
         rna_frac_adj = its.fraction + total_diff
 
-        APs = its.calc_abortive_probability(rna_frac_adj)
+        APs = calc_abortive_probability(rna_frac_adj)
 
     else:
         APs = its.abortive_probability
@@ -1024,13 +699,17 @@ def get_starting_APs(its_variant, adjust_2003_FL=False):
     return APs
 
 
-def compare_fraction(model_RNA_nr, experiment_RNA_fraction):
+def compare_fraction(df, experiment_RNA_fraction):
     """
     You probably need to improve this measure.
     """
 
+    species = ['rna_{0}'.format(i) for i in range(2,21)] + ['FL']
+
+    nr_final_rna = np.asarray([df[s].tail().tolist()[-1] for s in species])
+
     # Model fraction from #RNA
-    model_RNA_fraction = model_RNA_nr / model_RNA_nr.sum()
+    model_RNA_fraction = nr_final_rna / nr_final_rna.sum()
 
     diff = experiment_RNA_fraction - model_RNA_fraction
 
@@ -1047,21 +726,6 @@ def get_transcript_fraction(its_name):
     its = [i for i in dset if i.name == its_name][0]
 
     return its.fraction
-
-
-def get_nr_RNA(sim):
-    """
-    Get the nr of RNA from 2nt->20nt and FL (size = 20)
-    """
-
-    species = ['rna_{0}'.format(i) for i in range(2,21)] + ['FL']
-
-    df = calc_timeseries(species, sim)
-
-    # Get finalvalue and organize in an array
-    nr_rna = np.asarray([df[s].tail().tolist()[-1] for s in species])
-
-    return nr_rna
 
 
 def productive_species(nr_unproductive_RNA, transcript_fraction):
@@ -1144,14 +808,14 @@ def productive_species(nr_unproductive_RNA, transcript_fraction):
     return b
 
 
-def get_sim_name(reaction_setup, its_variant):
+def get_sim_name(stoi_setup, its_name):
 
-    if reaction_setup['unproductive']:
-        sim_name = '{0}_also_unproductive'.format(its_variant)
-    elif reaction_setup['unproductive_only']:
-        sim_name = '{0}_unproductive_only'.format(its_variant)
+    if stoi_setup.part_unproductive:
+        sim_name = '{0}_also_unproductive'.format(its_name)
+    elif stoi_setup.unproductive_only:
+        sim_name = '{0}_unproductive_only'.format(its_name)
     else:
-        sim_name = '{0}_productive_only'.format(its_variant)
+        sim_name = '{0}_productive_only'.format(its_name)
 
     return sim_name
 
