@@ -8,7 +8,7 @@ import stochpy
 import numpy as np
 import pandas as pd
 
-# Location of psc directories
+# Location of psc directory
 psc_dir = '/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/input/psc_files'
 
 
@@ -20,22 +20,24 @@ class ITSimulationSetup(object):
     def __init__(self, name, R, stoi_setup, initial_RNAP, sim_end, unproductive_pct=0.,
                  nr_trajectories=1, unproductive_only=False):
 
+        # Basic input
         self.nr_traj = nr_trajectories
         self.sim_end = sim_end
         self.unprod_pct = unproductive_pct
         self.init_RNAP = initial_RNAP
 
         # Find #productive and #unproductive RNAPs to simulate
-        self.calc_nr_RNAPs(unproductive_only)
+        self.nr_prod_RNAP, self.nr_unprod_RNAP = self.calc_nr_RNAPs(unproductive_only)
 
         # Create the graph for the model
         sim_graph = ktm.CreateModelGraph(R, name, stoi_setup)
 
-        # Set initial values and extract values from the graph for simulation
+        # Extract values from the graph
         reactions, initial_values, parameters = \
         ktm.GenerateStochasticInput(sim_graph, self.nr_prod_RNAP, self.nr_unprod_RNAP)
-        ktm.write_psc(reactions, initial_values, parameters, name, psc_dir)
 
+        # Write the model input psc file
+        ktm.write_psc(reactions, initial_values, parameters, name, psc_dir)
         self.model_psc_input = os.path.join(psc_dir, name + '.psc')
 
     def calc_nr_RNAPs(self, unproductive_only):
@@ -51,8 +53,7 @@ class ITSimulationSetup(object):
             nr_RNAP_unproductive = 0
             nr_RNAP_productive = self.init_RNAP
 
-        self.nr_prod_RNAP = nr_RNAP_productive
-        self.nr_unprod_RNAP = nr_RNAP_unproductive
+        return nr_RNAP_productive, nr_RNAP_unproductive
 
 
 class ITModel(object):
@@ -60,20 +61,19 @@ class ITModel(object):
     Initial transcription model
     """
 
-    def __init__(self, simulation_setup):
+    def __init__(self, setup):
 
-        self.setup = simulation_setup
-        self.nr_traj = simulation_setup.nr_traj
-        self.duration = simulation_setup.sim_end
-        self.psc_file = simulation_setup.model_psc_input
+        self.nr_traj = setup.nr_traj
+        self.duration = setup.sim_end
+        self.psc_file = setup.model_psc_input
 
     def run(self):
+
         sim = self._runStochPy(self.nr_traj, self.duration, self.psc_file)
 
         return self._calc_timeseries(sim)
 
     def _runStochPy(self, nr_traj, duration, psc_file):
-
         """
          Only for StochPy:
          - *method* [default='Direct'] stochastic algorithm (Direct, FRM, NRM, TauLeaping)
