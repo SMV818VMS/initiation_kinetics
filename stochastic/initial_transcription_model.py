@@ -38,8 +38,9 @@ class ITSimulationSetup(object):
         ktm.GenerateStochasticInput(sim_graph, self.nr_prod_RNAP, self.nr_unprod_RNAP)
 
         # Write the model input psc file
-        ktm.write_psc(reactions, initial_values, parameters, name, psc_dir)
-        self.model_psc_input = os.path.join(psc_dir, name + '.psc')
+        psc_path = ktm.write_psc(reactions, initial_values, parameters, name, psc_dir)
+        self.model_psc_input = psc_path
+        #self.model_psc_input = os.path.join(psc_dir, name + '.psc')
 
     def calc_nr_RNAPs(self, unproductive_only):
 

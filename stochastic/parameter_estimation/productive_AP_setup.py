@@ -7,6 +7,7 @@ sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/data')
 from ITSframework import calc_abortive_probability
 from initial_transcription_model import ITModel, ITSimulationSetup
 from metrics import rmse
+from KineticRateConstants import ITRates
 
 import numpy as np
 import pandas as pd
@@ -17,18 +18,17 @@ from ipdb import set_trace as debug  # NOQA
 
 class estimator_setup(object):
 
-    def __init__(self, initial_fraction, stoi_setup, R, name, init_RNAP,
+    def __init__(self, initial_fraction, stoi_setup, name, init_RNAP,
                  sim_end, observation_data):
 
         self.init_fraction = initial_fraction
-        self.R = R
         self.name = name
         self.init_RNAP = init_RNAP
         self.duration = sim_end
         self.stoi_setup = stoi_setup
         self.observation_data = observation_data
 
-    def parameters(self):
+    def parameters(self, parameter_ranges=False):
         """
         This method will be sampled n times to get n different parameter
         values. Two approaches. One is to increase FL% and deduct from 2nt%,
@@ -49,31 +49,32 @@ class estimator_setup(object):
         compare with results of modeling. Build intuation in this way.
         """
 
-        # Let's try this the SPOTPY way
-        pars = []
-        #                      Random values         Name         Step    Guess
-        pars.append((uniform(low=0.05,  high=0.4), '2nt_frac',    0.02,   0.10))
-        pars.append((uniform(low=0.01, high=0.10), 'unprod_frac', 0.05,   0.05))
-        dtype=np.dtype([('random', '<f8'), ('name', '|S30'),('step', '<f8'),('optguess', '<f8')])
+        # Initial boundaries of parameter space
+        if parameter_ranges is False:
+            parameter_ranges = {'frac_2nt':   {'low': 0.05, 'high': 0.40},
+                                'unprod_frac': {'low': 0.01, 'high': 0.10}}
 
-        # They are using labled arrays (structured arrays). I wasn't aware of that.
-        structured_array = np.array(pars, dtype=dtype)
+        # Generate random values
+        parameters = {}
+        for name, ranges in parameter_ranges.items():
+            parameters[name] = uniform(low=ranges['low'], high=ranges['high'])
 
-        return structured_array
+        return parameters
 
     def simulation(self, parameters):
 
-        frac_2nt, unprod_frac = parameters
+        frac_2nt = parameters['frac_2nt']
+        unprod_frac = parameters['unprod_frac']
 
         # Find new abortive probability with updated RNA fraction
         new_aps = self._calc_new_aps(frac_2nt)
 
-        # Update with new APs
-        self.R.set_custom_AP(new_aps)
+        # Important: make R in here
+        R = ITRates(self.name, nac=9.2, unscrunch=1.6, escape=5,
+                    custom_AP=new_aps)
 
-        # Create simulation setup (important: with updated % unproductive
-        # sequences)
-        sim_setup = ITSimulationSetup(self.name, self.R, self.stoi_setup,
+        # Create simulation setup
+        sim_setup = ITSimulationSetup(self.name, R, self.stoi_setup,
                                       self.init_RNAP, self.duration,
                                       unproductive_frac=unprod_frac)
 

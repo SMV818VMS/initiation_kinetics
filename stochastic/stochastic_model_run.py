@@ -5,6 +5,7 @@ import sys
 sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/model')
 sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/data')
 sys.path.append(os.path.join(os.path.dirname(__file__), "parameter_estimation"))
+import parest
 import kinetic_transcription_models as ktm
 from KineticRateConstants import ITRates
 from initial_transcription_model import ITModel, ITSimulationSetup
@@ -519,60 +520,55 @@ def productive_AP_estimate():
     parameter sampling and model running and model fitting and parameter
     analysis so it will be easier to get back to.
     """
+    #from productive_AP_setup_noclass import estimator_setup
     from productive_AP_setup import estimator_setup
-    import spotpy
-
-    # Let's try spotpy. Where it does not work, patch it up.
 
     # Setup
     variant_name = 'N25'
     ITSs = data_handler.ReadData('dg100-new')
     its_variant = [i for i in ITSs if i.name == variant_name][0]
-    initial_RNAP = 100
-    sim_end = 60. * 1
+    initial_RNAP = 400
+    sim_end = 60. * 3
 
     stoi_setup = ktm.ITStoichiometricSetup(escape_RNA_length=12,
                                            part_unproductive=True,
                                            custom_AP=True)
 
-    R = ITRates(its_variant, nac=9.2, unscrunch=1.6, escape=5)
+    R_ref = ITRates
     # Precalculate this value for comparison with model results
     experiment_RNA_fraction = its_variant.fraction
 
     # Get experimental data -- only up to the duration of the simulation
     N25_kinetic_ts = get_N25_kinetic_data(sim_end)
 
-    estim = estimator_setup(experiment_RNA_fraction, stoi_setup, R,
-                            variant_name, initial_RNAP, sim_end,
-                            N25_kinetic_ts)
+    estim_setup = estimator_setup(experiment_RNA_fraction, stoi_setup, R_ref,
+                                  variant_name, initial_RNAP, sim_end,
+                                  N25_kinetic_ts)
 
-    # This shows it works. Now try with spotpy.
-    #params = estim.parameters()
-    #sim_result = estim.simulation(params['random'])
-    #observation = estim.evaluation()
-    #score = estim.likelihood(sim_result, observation)
+    name = 'N25_AP_est_test'
+    rerun = True
+    #rerun = False
+    if rerun:
+        sampler = parest.Parest(estim_setup, samples=4, name=name,
+                                processes=2, batch_size=11)
+        sampler.search()
+        results = sampler.get_results()
+    else:
+        results = parest.load_results(name)
 
-    sampler = spotpy.algorithms.sceua(estim, dbname='MC_N25', dbformat='csv')
-    sampler.sample(5)
-    results = sampler.getdata()
+    params = results['parameters']
+    tss = results['time_series']
 
-    #results = spotpy.analyser.load_csv_results('MC_N25')
-    # Why does the results array have dtype with lots of simulation numbers?
-    # We just sample 10 times...
-    # XXX Tried SA... keeps going forever: simulation 23 out of 10 ...
-    # XXX FUCK also the sceua keeps going, does not respect the sample number.
-    # MMMHH I think it's good that these guys have implemented all these
-    # methods, but it doesn't seem very useful to me.
+    model_abortives = tss[:37]
+    model_FLs = tss[37:]
 
-    # You can do the following to create your own using a monte carlo sampler.
-    # This might be necessary because you cannot run many simulations. Max
-    # 1000 and that's pushing all 8 cores it on a good day.
+    obs_data = estim_setup.observation()
+    obs_abortives = obs_data[:37]
+    obs_FL = obs_data[37:]
 
-    evaluation = estim.evaluation()
+    # TODO: plot results. Plot AP and fractions too for the best results.
 
     debug()
-
-    spotpy.analyser.plot_bestmodelruns(results, evaluation)
 
 
 def get_N25_kinetic_data(sim_end):
