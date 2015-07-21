@@ -497,11 +497,16 @@ def write_psc(reactions, initial_values, parameters, graph_name, write_dir):
     if not os.path.isdir(write_dir):
         os.makedirs(write_dir)
 
+    import tempfile
     # Write to file
-    filepath = os.path.join(write_dir, graph_name + '.psc')
-    handle = open(filepath, 'wb')
+    #filepath = os.path.join(write_dir, graph_name + '.psc')
+    #handle = open(filepath, 'wb')
+    handle = tempfile.NamedTemporaryFile(delete=False, suffix='.psc')
     for line in lines:
+        #handle.write(line + os.linesep)
         handle.write(line + os.linesep)
     handle.close()
+
+    return handle.name
 
 
