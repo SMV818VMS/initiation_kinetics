@@ -17,13 +17,14 @@ class ITSimulationSetup(object):
     Setup for stochastic simulation.
     """
 
-    def __init__(self, name, R, stoi_setup, initial_RNAP, sim_end, unproductive_pct=0.,
-                 nr_trajectories=1, unproductive_only=False):
+    def __init__(self, name, R, stoi_setup, initial_RNAP, sim_end,
+                 unproductive_frac=0., nr_trajectories=1,
+                 unproductive_only=False):
 
         # Basic input
         self.nr_traj = nr_trajectories
         self.sim_end = sim_end
-        self.unprod_pct = unproductive_pct
+        self.unproc_frac = unproductive_frac
         self.init_RNAP = initial_RNAP
 
         # Find #productive and #unproductive RNAPs to simulate
@@ -45,9 +46,9 @@ class ITSimulationSetup(object):
         if unproductive_only:
             nr_RNAP_unproductive = self.init_RNAP
             nr_RNAP_productive = 0
-        elif self.unprod_pct > 0:
-            assert 0 < self.unprod_pct < 1
-            nr_RNAP_unproductive = floor(self.init_RNAP * self.unprod_pct)
+        elif self.unproc_frac > 0:
+            assert 0 < self.unproc_frac < 1
+            nr_RNAP_unproductive = floor(self.init_RNAP * self.unproc_frac)
             nr_RNAP_productive = self.init_RNAP - nr_RNAP_unproductive
         else:
             nr_RNAP_unproductive = 0

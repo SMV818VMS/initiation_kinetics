@@ -455,7 +455,10 @@ def plot_2003_kinetics():
     It seems that with the competitive promoter thre is much less abortive
     recycling.
 
-    I think the kinetics of the competitive promoter looks best.
+    I think the kinetics of the competitive promoter looks best. It has
+    stronger correlation, and the rate of abortive synthesis is lower after
+    all the FL has been reached, which indicates that there is less
+    reinitiation.
     """
 
     data ='/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/'
@@ -517,13 +520,16 @@ def productive_AP_estimate():
     analysis so it will be easier to get back to.
     """
     from productive_AP_setup import estimator_setup
+    import spotpy
+
+    # Let's try spotpy. Where it does not work, patch it up.
 
     # Setup
     variant_name = 'N25'
     ITSs = data_handler.ReadData('dg100-new')
     its_variant = [i for i in ITSs if i.name == variant_name][0]
-    initial_RNAP = 1000
-    sim_end = 60. * 1.5
+    initial_RNAP = 100
+    sim_end = 60. * 1
 
     stoi_setup = ktm.ITStoichiometricSetup(escape_RNA_length=12,
                                            part_unproductive=True,
@@ -536,42 +542,37 @@ def productive_AP_estimate():
     # Get experimental data -- only up to the duration of the simulation
     N25_kinetic_ts = get_N25_kinetic_data(sim_end)
 
-    estim = estimator_setup(experiment_RNA_fraction, stoi_setup, R, variant_name,
-                    initial_RNAP, sim_end, N25_kinetic_ts)
+    estim = estimator_setup(experiment_RNA_fraction, stoi_setup, R,
+                            variant_name, initial_RNAP, sim_end,
+                            N25_kinetic_ts)
 
-    params = estim.parameters()
+    # This shows it works. Now try with spotpy.
+    #params = estim.parameters()
+    #sim_result = estim.simulation(params['random'])
+    #observation = estim.evaluation()
+    #score = estim.likelihood(sim_result, observation)
 
-    result = estim.simulation(params)
+    sampler = spotpy.algorithms.sceua(estim, dbname='MC_N25', dbformat='csv')
+    sampler.sample(5)
+    results = sampler.getdata()
 
-    #for ap in APs:
+    #results = spotpy.analyser.load_csv_results('MC_N25')
+    # Why does the results array have dtype with lots of simulation numbers?
+    # We just sample 10 times...
+    # XXX Tried SA... keeps going forever: simulation 23 out of 10 ...
+    # XXX FUCK also the sceua keeps going, does not respect the sample number.
+    # MMMHH I think it's good that these guys have implemented all these
+    # methods, but it doesn't seem very useful to me.
 
-        #sim_name = get_sim_name(stoi_setup, its_variant)
+    # You can do the following to create your own using a monte carlo sampler.
+    # This might be necessary because you cannot run many simulations. Max
+    # 1000 and that's pushing all 8 cores it on a good day.
 
-        #sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end,
-                                      #unproductive_pct)
+    evaluation = estim.evaluation()
 
-        #model = ITModel(sim_setup)
+    debug()
 
-        #if multiproc:
-            #r = pool.apply_async(model.run)
-            #results.append(r)
-        #else:
-            #model_ts = model.run()
-            ## Compare the % of final species with the experimentally measured values
-            #val1 = compare_fraction(model_ts, experiment_RNA_fraction)
-            #val2, val3 = compare_timeseries(N25_kinetic_ts, model_ts)
-
-            #write_AP_estimator_log(log_handle, ap, val1, val2, val3, nt_range)
-
-    #if multiproc:
-        #mRfs = [r.get() for r in results]
-        #for (model_RNA_nr, model_ts), ap in zip(mRfs, APs):
-            #val1 = compare_fraction(model_RNA_nr, experiment_RNA_fraction)
-            #val2, val3 = compare_timeseries(N25_kinetic_ts, model_ts)
-
-            #write_AP_estimator_log(log_handle, ap, val1, val2, val3, nt_range)
-
-    #log_handle.close()
+    spotpy.analyser.plot_bestmodelruns(results, evaluation)
 
 
 def get_N25_kinetic_data(sim_end):
