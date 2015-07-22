@@ -521,74 +521,126 @@ def productive_AP_estimate():
     analysis so it will be easier to get back to.
     """
     #from productive_AP_setup_noclass import estimator_setup
-    from productive_AP_setup import estimator_setup
+    #from productive_AP_setup import estimator_setup
+    from FL_2003_setup import estimator_setup
 
     # Setup
     variant_name = 'N25'
     ITSs = data_handler.ReadData('dg100-new')
     its_variant = [i for i in ITSs if i.name == variant_name][0]
-    initial_RNAP = 400
-    sim_end = 60. * 3
+    initial_RNAP = 200
+    sim_end = 60. * 1.5
+    samples = 30
+    processes = 2
+    batch_size = 31
 
-    stoi_setup = ktm.ITStoichiometricSetup(escape_RNA_length=12,
-                                           part_unproductive=True,
-                                           custom_AP=True)
+    # XXX OK you got some decent fits to the kinetic data as well, but the
+    # shape is not quite right. One approach can be to adjust the 2nt fraction
+    # to see if you get a better fit. But first, try to get batch mode up and
+    # running!
 
-    R_ref = ITRates
-    # Precalculate this value for comparison with model results
-    experiment_RNA_fraction = its_variant.fraction
+    # Get observation data up to the duration of the simulation
+    N25_kinetic_ts = get_N25_kinetic_data(sim_end, method_nr=1)
 
-    # Get experimental data -- only up to the duration of the simulation
-    N25_kinetic_ts = get_N25_kinetic_data(sim_end)
+    estim_setup = estimator_setup(its_variant, initial_RNAP, sim_end, N25_kinetic_ts)
 
-    estim_setup = estimator_setup(experiment_RNA_fraction, stoi_setup, R_ref,
-                                  variant_name, initial_RNAP, sim_end,
-                                  N25_kinetic_ts)
-
-    name = 'N25_AP_est_test'
+    # XXX NEXT get batch mode to work.
+    name = 'N25_AP_est'
     rerun = True
     #rerun = False
     if rerun:
-        sampler = parest.Parest(estim_setup, samples=4, name=name,
-                                processes=2, batch_size=11)
+        sampler = parest.Parest(estim_setup, samples=samples, name=name,
+                                processes=processes, batch_size=batch_size)
         sampler.search()
         results = sampler.get_results()
     else:
         results = parest.load_results(name)
 
-    params = results['parameters']
-    tss = results['time_series']
+    plot_results(estim_setup.observation(), results)
 
-    model_abortives = tss[:37]
-    model_FLs = tss[37:]
 
-    obs_data = estim_setup.observation()
-    obs_abortives = obs_data[:37]
-    obs_FL = obs_data[37:]
+def plot_results(obs, results):
+    """
+    When comparing FL only, I think you need to normalize with max FL and not
+    abortive. There are a lot of differences popping up for FL and NON FL. You
+    should make two different setups.
+    """
 
-    # TODO: plot results. Plot AP and fractions too for the best results.
+    plot_top = 3
+
+    # normalize for plotting
+    # make into a pandas dataframe
+    obs = pd.DataFrame(obs)
+    obs = obs / obs.max()
+    pars = results['parameters']
+
+    # Pick the top 3 results
+    top_params = pars.sort('score')[:plot_top]
+    # Extract timeseries
+    ts = results['time_series']
+
+    top_params_sim_nr = top_params.index
+    #top_params_col_names = [str(s) for s in top_params_sim_nr]
+
+    #top_ts = ts[top_params_col_names]
+    top_ts = ts[top_params_sim_nr]
+
+    #  Interesting. Saving and loading to csv makes so that some indices lose
+    #  precision so that they are not the same number any more. Must re-index
+    #  to be sure. A shame!
+    #top_ts.index = obs.index
+    #joined = pd.concat([obs, top_ts], axis=1)
+    # Do you need to join? can't you just plot both?
 
     debug()
 
+    # Build a list of labels
+    labels = []
+    noscore = top_params.drop('score', axis=1)
+    for sim_nr in top_params_sim_nr:
+        par_vals = noscore.loc[sim_nr].to_dict()
+        lab = ' '.join(['{0}: {1:.2f}'.format(k,v) for k,v in par_vals.items()])
+        labels.append(lab)
+    # Restore observation
+    labels.insert(0, 'Experiment')
 
-def get_N25_kinetic_data(sim_end):
+    f, ax = plt.subplots()
+    obs.plot(ax=ax)
+    top_ts.plot(ax=ax)
+    ax.legend(labels, loc='lower right')
+    f.savefig('quicktest.pdf')
+
+
+def get_N25_kinetic_data(sim_end, method_nr=1):
 
     # Fetch kinetic data for N25 for comparison
     data ='/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/'
-    path = os.path.join(data, 'vo_2003/Fraction_FL_and_abortive_timeseries_method_2.csv')
+    if method_nr == 1:
+        path = os.path.join(data, 'vo_2003/Fraction_FL_and_abortive_timeseries_method_1.csv')
+    elif method_nr == 2:
+        path = os.path.join(data, 'vo_2003/Fraction_FL_and_abortive_timeseries_method_2.csv')
+
     ts = pd.read_csv(path, index_col=0)
     ts.index = ts.index * 60.  # min -> sec
 
-    # rename columns for later
-    ren ={'Abortive competitive promoter': 'Abortive experiment',
-          'FL competitive promoter': 'FL experiment'}
+    # rename columns
+    if method_nr == 1:
+        ren = {'Abortive halted elongation': 'Abortive experiment',
+              'FL halted elongation': 'FL experiment'}
+    elif method_nr == 2:
+        ren = {'Abortive competitive promoter': 'Abortive experiment',
+              'FL competitive promoter': 'FL experiment'}
+
     ts.rename(columns=ren, inplace=True)
+
+    # Insert 0 as the firrst row (is this actually helpful?)
+    first_meas = pd.DataFrame(data={'Abortive experiment': 0.0,
+                                    'FL experiment': 0.0},
+                              index=[0.0])
+    first_meas.append(ts)
 
     # let there be 1 timestep more in model than in simulation
     t = ts[:sim_end-1]
-
-    # Normalize to the largest value
-    t = t / t.max().max()
 
     return t
 

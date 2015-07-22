@@ -8,6 +8,8 @@ from ITSframework import calc_abortive_probability
 from initial_transcription_model import ITModel, ITSimulationSetup
 from metrics import rmse
 from KineticRateConstants import ITRates
+import kinetic_transcription_models as ktm
+import copy
 
 import numpy as np
 import pandas as pd
@@ -18,14 +20,11 @@ from ipdb import set_trace as debug  # NOQA
 
 class estimator_setup(object):
 
-    def __init__(self, initial_fraction, stoi_setup, name, init_RNAP,
-                 sim_end, observation_data):
+    def __init__(self, its_variant, init_RNAP, sim_end, observation_data):
 
-        self.init_fraction = initial_fraction
-        self.name = name
+        self.its_variant = its_variant
         self.init_RNAP = init_RNAP
         self.duration = sim_end
-        self.stoi_setup = stoi_setup
         self.observation_data = observation_data
 
     def parameters(self, parameter_ranges=False):
@@ -51,7 +50,7 @@ class estimator_setup(object):
 
         # Initial boundaries of parameter space
         if parameter_ranges is False:
-            parameter_ranges = {'frac_2nt':   {'low': 0.05, 'high': 0.40},
+            parameter_ranges = {'frac_2nt':    {'low': 0.05, 'high': 0.40},
                                 'unprod_frac': {'low': 0.01, 'high': 0.10}}
 
         # Generate random values
@@ -63,18 +62,20 @@ class estimator_setup(object):
 
     def simulation(self, parameters):
 
+        stoi_setup = ktm.ITStoichiometricSetup(escape_RNA_length=12,
+                                               part_unproductive=True,
+                                               custom_AP=True)
+
         frac_2nt = parameters['frac_2nt']
         unprod_frac = parameters['unprod_frac']
 
         # Find new abortive probability with updated RNA fraction
         new_aps = self._calc_new_aps(frac_2nt)
-
-        # Important: make R in here
-        R = ITRates(self.name, nac=9.2, unscrunch=1.6, escape=5,
+        R = ITRates(self.its_variant, nac=9.2, unscrunch=1.6, escape=5,
                     custom_AP=new_aps)
 
         # Create simulation setup
-        sim_setup = ITSimulationSetup(self.name, R, self.stoi_setup,
+        sim_setup = ITSimulationSetup(self.its_variant.name, R, stoi_setup,
                                       self.init_RNAP, self.duration,
                                       unproductive_frac=unprod_frac)
 
@@ -90,26 +91,26 @@ class estimator_setup(object):
 
     def observation(self):
         """
-        Returns timeseries of abortive and fl in one array, abortive first
+        Returns timeseries of abortive and FL in one array, abortive first
         I think this method should be called observation not evaluation;
         evalution happens in the likelihood function.
         """
         # Make a single array that joins the two timeseries for comparison
         # with results
-        observation = np.append(self.observation_data['Abortive experiment'],
-                                self.observation_data['FL experiment'])
-        return observation
+        obs = np.append(self.observation_data['Abortive experiment'],
+                        self.observation_data['FL experiment'])
+        return obs
 
-    def evaluation(self, simulation, observation):
+    def evaluation(self, sim, obs):
 
-        measure_of_fit = rmse(simulation, observation)
+        measure_of_fit = rmse(sim, obs)
 
         return measure_of_fit
 
     def _calc_new_aps(self, frac_2nt):
 
-        # From 1% to max 2nt fraction
-        init_2nt = self.init_fraction[0]
+        # Precalculate this value for comparison with model results
+        init_2nt = self.its_variant.fraction[0]
         new_2nt = uniform(0.20, 0.3)
 
         diff = init_2nt - new_2nt
@@ -130,9 +131,10 @@ class estimator_setup(object):
 
     def _extract_timeseries(self, model):
 
-        # First, make a copy of the experiment dataframe so you don't alter it for
-        # future comparisons.
-        experiment = self.observation_data
+        experiment = copy.deepcopy(self.observation_data)
+
+        # Normalize to the largest value (abortive RNA)
+        experiment = experiment / experiment.max().max()
 
         # Add up all abortive rna and add as separate column
         cols = model.columns.tolist()
@@ -202,7 +204,8 @@ class estimator_setup(object):
         # there should still be some to be spread around in the middle,
         # ensuring high initial abortive synthesis.
 
-        model_data_at_obs_times = np.append(joined['Abortive model'], joined['FL'])
-
-        return model_data_at_obs_times
+        if self.FL_only:
+            return np.asarray(joined['FL'])
+        else:
+            return np.append(joined['Abortive model'], joined['FL'])
 
