@@ -35,36 +35,46 @@ if not os.path.isdir(save_dir):
 
 class _Controller(object):
     """
-    Handle the minutia of multiprocessing.
-
-    Execpt now it's gone down the drain because pickle can't deal with
-    functions defined in a class. What used to be a nice design is now a
-    spaghetti mess.
+    Handle the minutia of multiprocessing. And the non-minutia of
+    single-processing which become minutia when combined with
+    multiprocessing.
     """
     def __init__(self, processes, function):
-        self._simulations = []
-        self._pool = Pool(processes)
+        self._procs = processes
+        if self._procs > 1:
+            self._multiprocessing = True
+        else:
+            self._multiprocessing = False
+
         self._f = function
         self._sim_nrs = []
-        self._parameters_used = []
+        self._parameters = []
+        self._results = []
 
     def addSimulation(self, sim_nr, params):
         self._sim_nrs.append(sim_nr)
-        self._parameters_used.append(params)
-        s = self._pool.apply_async(self._f, (params,))
-        self._simulations.append(s)
+        self._parameters.append(params)
 
     def runSimulations(self):
-        self._pool.close()
-        self._pool.join()
+        """
+        With multiprocessing, add each simulation to a pool before extracting
+        them. map_async preserves order! apply_async apparently does not :S
+        """
+        if self._multiprocessing:
+            P = Pool(self._procs)
+            sims = P.map_async(self._f, self._parameters)
+            P.close()
+            P.join()
+            self._results = sims.get()
+        else:
+            self._results = [self._f(params) for params in self._parameters]
 
     def getSimulations(self):
         """
         Relies on the order with which arguments and simulation numbers were
         added in addSimulation
         """
-        results = [s.get() for s in self._simulations]
-        return zip(self._sim_nrs, results, self._parameters_used)
+        return zip(self._sim_nrs, self._results, self._parameters)
 
 
 class Parest(object):
@@ -76,10 +86,10 @@ class Parest(object):
 
     def __init__(self, setup, samples, name, processes, batch_size=5):
 
-        self.par = setup.parameters
-        self.sim = setup.simulation
-        self.obs = setup.observation()
-        self.eva = setup.evaluation
+        self.parameters = setup.parameters
+        self.simulation = setup.simulation
+        self.observed = setup.observation()
+        self.evaluate = setup.evaluation
         self.name = name
 
         # Nr of samples to make
@@ -123,16 +133,15 @@ class Parest(object):
 
         # Do parallell runs even if you only run with 1 processor; your runs
         # are so long that the overhead does not matter
-        ctrl = _Controller(self.procs, self.sim)
+        ctrl = _Controller(self.procs, self.simulation)
 
         for sim in range(nr_samples):
             self.sim_nr +=1
             # Get parameters (bad to test every time in here; but avoid perfection for now)
             if iterated_parameters is False:
-                params = self.par()  # initial parameters
+                params = self.parameters()  # initial parameters
             else:
                 params = iterated_parameters
-            print params
 
             # Find new abortive probability with updated RNA fraction
             ctrl.addSimulation(self.sim_nr, params)
@@ -145,8 +154,7 @@ class Parest(object):
         for sim_nr, sim_result, params_used in ctrl.getSimulations():
             #print results
             index.append(sim_nr)
-            score = self.eva(sim_result, self.obs)
-            # Add results to datastructures
+            score = self.evaluate(sim_result, self.observed)
             res_data[sim_nr] = sim_result
             par_data['score'].append(score)
             for name, val in params_used.items():
@@ -154,7 +162,7 @@ class Parest(object):
 
         # Generate dataframes
         par_frame = frame(data=par_data, index=index)
-        res_frame = frame(data=res_data)
+        res_frame = frame(data=res_data, index=self.observed.index)
 
         # Add new results to previous, if any.
         self._concatenate_results(par_frame, res_frame)
@@ -235,11 +243,14 @@ def load_results(name):
     """
     # parameters
     param_path = _get_param_path(name)
-    parameter_frame = read_csv(param_path, sep='\t')
+    parameter_frame = read_csv(param_path, sep='\t', index_col=0)
 
     # simulation results
     results_path = _get_result_path(name)
-    result_frame = read_csv(results_path, sep='\t')
+    result_frame = read_csv(results_path, sep='\t', index_col=0)
+
+    # You want the columns to be ints
+    result_frame.columns = [int(i) for i in result_frame.columns]
 
     return {'parameters': parameter_frame,
             'time_series': result_frame}
