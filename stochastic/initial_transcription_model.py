@@ -3,6 +3,9 @@ from math import floor
 import sys
 sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/model')
 import kinetic_transcription_models as ktm
+from ipdb import set_trace as debug  # NOQA
+
+from collections import OrderedDict
 
 import stochpy
 import numpy as np
@@ -65,9 +68,21 @@ class ITModel(object):
 
     def __init__(self, setup):
 
+        self.setup = setup
         self.nr_traj = setup.nr_traj
         self.duration = setup.sim_end
         self.psc_file = setup.model_psc_input
+
+    def calc_setup_hash(self):
+
+        import cPickle as pickle
+        import hashlib
+        # serialize to a string and make a hash
+        # But you need to make a copy without the path to psc.
+        setupcopy = copy(self.setup)
+        setup_serialized = pickle.dumps(self.setup)
+        print setup_serialized
+        return hashlib.md5(setup_serialized).hexdigest()
 
     def run(self):
 
@@ -93,10 +108,17 @@ class ITModel(object):
 
     def _calc_timeseries(self, sim):
         """
-        Returns a Pandas dataframe for all the simulated species
+        Returns a Pandas dataframe for all RNA species.
+
+        In the future, you may wish to get the raw data as well to plot the
+        distribution of duration of RNAP in different states.
         """
 
         species_names = ['rna_{0}'.format(i) for i in range(2,21)] + ['FL']
+
+        #species_names += ['productive open complex']
+        #species_names += ['unproductive open complex']
+        #species_names += ['elongating complex']
 
         model_names = sim.data_stochsim.species_labels
 
@@ -106,16 +128,17 @@ class ITModel(object):
         #time = sim.data_stochsim.time
         time = [t[0] for t in sim.data_stochsim.time]
 
-        data = {}
+        data = OrderedDict()
         for species in species_names:
 
             ts = self._parse_model_data(species, all_ts, model_names)
             # I know type testing is bad, but how bad is it?
             # Try/except yeah ...
+            #data[species] = ts
             if type(ts) is np.ndarray:
                 data[species] = ts
             elif type(ts) is int:
-                continue
+                data[species] = 0  # this is a bit wasteful, but whaev.
             else:
                 print('What?')
                 1/0
