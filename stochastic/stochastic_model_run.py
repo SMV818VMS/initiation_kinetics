@@ -10,6 +10,7 @@ import kinetic_transcription_models as ktm
 from KineticRateConstants import ITRates
 from initial_transcription_model import ITModel, ITSimulationSetup
 from ITSframework import calc_abortive_probability
+from metrics import weighted_avg_and_std
 
 from ipdb import set_trace as debug  # NOQA
 import numpy as np
@@ -19,9 +20,14 @@ import matplotlib.pyplot as plt
 import data_handler
 from multiprocessing import Pool
 import seaborn  # NOQA
-
 from scipy.optimize import curve_fit
+#import shelve
+
 import scipy.stats as stats
+
+
+log_dir = 'Log'
+scrunch_db = os.path.join(log_dir, 'scrunch_fit_df_storage')
 
 
 def bai_rates(nuc, NTP, EC):
@@ -77,7 +83,7 @@ def uniform_sample(a, b, nr_samples):
     return np.random.sample(nr_samples) * (b - a) + a
 
 
-def get_estim_parameters(method='manual'):
+def get_estim_parameters(method='manual', samples=10):
     """
     Ideally you'd like for this to be iteratively. For now, just test simply.
     method: manual, uniform, normal
@@ -86,6 +92,7 @@ def get_estim_parameters(method='manual'):
     For N25 with escape at 14, with 0 ap the last 3 steps, and with GreB+ APs,
     the best fit seems to be around Nac=9.1, abort = 1.6, and Escape= ca 5.
     """
+    from numpy.random import uniform
 
     params = []
     if method == 'manual':
@@ -94,55 +101,231 @@ def get_estim_parameters(method='manual'):
                 for escape in [nac, nac/2, nac/10.]:
                     params.append((nac, abortive, escape))
 
+    # OK, even with this way of sampling I'm arriving to the same answer more
+    # or less like last time. That's good. The lack of correlation could be
+    # because we're already close to the optimum.
     elif method == 'uniform':
-        for nac in uniform_sample(10, 40, 5):
-            for abortive in uniform_sample(10, 50, 5):
-                for escape in uniform_sample(10, 50, 5):
-                    params.append((nac, abortive, escape))
-
-    #  This was narrowed in
-    #elif method == 'uniform':
-        #for nac in uniform_sample(8, 10, 4):
-            #for abortive in uniform_sample(1.5, 2.5, 4):
+        #for nac in uniform_sample(5, 12, 4):
+            #for abortive in uniform_sample(1.5, 6.5, 4):
                 #for escape in uniform_sample(3.5, 7.5, 4):
                     #params.append((nac, abortive, escape))
+
+        for sample_nr in range(samples):
+            nac = uniform(5, 15)
+            abortive = uniform(1, 6)
+            escape = uniform(0.1, 15)
+
+            params.append((nac, abortive, escape))
 
     return params
 
 
+def revyakin_datafit_new():
+    """
+    Use the new framework
+    """
+    #from productive_AP_setup import estimator_setup
+    from scrunch_distribution import estimator_setup
+
+    # Setup
+    variant_name = 'N25'
+    ITSs = data_handler.ReadData('dg100-new')
+    its_variant = [i for i in ITSs if i.name == variant_name][0]
+    initial_RNAP = 100
+    sim_end = 300
+    samples = 100
+    processes = 2
+    #batch_size = 15
+    batch_size = samples - 1
+    # XXX with my 8-core I could be 8 times as fast: 15 seconds instead of 2
+    # minutes wait. Yes plz.
+
+    # XXX If the whole thing was pandas-aware you could in the results part
+    # include both model (lots of data) and observation (few data)
+    # Damn you need to think about that.
+
+    # Get observation data
+    experiment, extrapolated = get_experiment_scrunch_distribution()
+
+    estim_setup = estimator_setup(its_variant, initial_RNAP, sim_end,
+                                  experiment, escape_length=12)
+
+    # why are all simulations suddenly having an end time of 90s?
+    name = 'N25_scrunch_distribution_100x100'
+    rerun = True
+    #rerun = False
+    if rerun:
+        sampler = parest.Parest(estim_setup, samples=samples, name=name,
+                                processes=processes, batch_size=batch_size)
+        sampler.search()
+        results = sampler.get_results()
+    else:
+        results = parest.load_results(name)
+
+    # Yeah, so you rewrote your "framework" (I'm tarting to dislike it) to use
+    # pandas so that you can easily include each result's timeseries in a
+    # single datafame. Guess what, they have unique but similar time-points,
+    # so that the size of the dataframe becomes enormous. Try to manage for
+    # now, but a lesson for the future would be to return a dictionary with
+    # dataframes.
+    plot_scrunch(estim_setup.observation(), results, estim_setup.parameters().keys())
+
+
+def plot_scrunch(obs, results, param_names):
+    """
+    Shit! I don't know what it is, but there is something not right in this
+    mor complex code you have made. I believe the scores, but I don't beleive
+    the parameters associated with them. Thre
+    """
+
+    plot_top = 10
+
+    # normalize for plotting
+    # make into a pandas dataframe
+    obs = pd.DataFrame(obs)
+    obs = obs / obs.max()
+    pars = results['parameters']
+
+    pars_sorted = pars.sort('euclid')
+    pars_sorted_nofit = pars_sorted[param_names]
+
+    # Pick the top 3 results according to one of the metrics
+    top_params = pars.sort('euclid')[:plot_top]
+
+    # Extract corresponding top timeseries
+    ts = results['time_series']
+    top_params_sim_nr = top_params.index
+    top_ts = ts[top_params_sim_nr]
+
+    # For this in that, plot it.
+    debug()
+
+    #plot_scrunch_distributions(model_scrunches, experiment, extrapolated, title)
+
+
 def revyakin_datafit():
     """
-    9/9/1.8 is very good.
-
     XXX Show that using GreB - that the optimal rates do not make sense, and
     that they make sense with GreB +
+
+    HEY! Between-sample variability is very high until 5000k. Shit, what
+    should you do about that? Even at 10K you are at the level where scores
+    differ enough to take a parameter combinatin from high to low.
+
+    Maybe this is something you could focus on in your paper? I bet this
+    effect will be very strong for the higly abortive complexes. You could do
+    some bootsrapping to get some kind of confidence interval.
+
+    With 100 simulations the picture is generally rougher. You could use it to
+    paint a picture of the variability in the process. But who is to say that
+    the stochastichness in the stochastic simulations (which are based on
+    particle collision theory ...) is correct for initial transcription?
     """
 
     # Setup
     variant_name = 'N25'
     ITSs = data_handler.ReadData('dg100-new')
     its_variant = [i for i in ITSs if i.name == variant_name][0]
-    initial_RNAP = 500
-    sim_end = 180
-    #params = get_estim_parameters(method='uniform')
-    params = [(9.2, 1.6, 5)]  # the golden params
+    initial_RNAP = 100
+    sim_end = 1000
+    samples = 1000
+    GreB = True
+    params = get_estim_parameters(method='uniform', samples=samples)
+    #params = [(9.2, 1.6, 5)]  # the golden params
+    #params = [(12, 1.3, 6)]  # new golden params?
     stoi_setup = ktm.ITStoichiometricSetup(escape_RNA_length=12)
 
-    log_file = 'simple_log.log'
-    log_handle = open(log_file, 'w')
+    log_name = '{0}-RNAP_{1}-samples_{2}-GreB_scrunch'.format(initial_RNAP, samples, GreB)
+
+    #calculate = True
+    calculate = False
+
+    plot = False
+    #plot = True
+
+    multiproc = True
+    #multiproc = False
+
+    if calculate:
+        search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
+                               initial_RNAP, sim_end, params, plot, log_name)
+    else:
+        weighted_parameter_distributions(log_name)
+
+
+def weighted_parameter_distributions(log_name):
+
+    top = 100
+
+    fitness_log_file = os.path.join(log_dir, log_name+'.log')
+    df = pd.read_csv(fitness_log_file, sep='\t', header=0)
+
+    df.sort('Fit', inplace=True)
+
+    # XXX The picture looks good except for this one outlier at 14 which had a
+    # good score which made all the rest look really bad. Assume that such an
+    # outlier won't be there when you do the full set.
+    df = df.drop(384)
+
+    df = df[:top]
+
+    nac = df['Nac']
+    ab = df['Abort']
+    es = df['Escape']
+
+    # look onl at the top 100
+    weight = 1./ (df['Fit'] / df['Fit'].min())
+
+    #step = 0.01
+
+    f, axes = plt.subplots(3)
+    #dff = pd.DataFrame(data=np.asarray(nac), index=np.asarray(weight))
+    data = {'nac': np.asarray(nac), 'abortive': np.asarray(ab), 'Escape': np.asarray(es)}
+    dff = pd.DataFrame(data=data, index=np.asarray(weight))
+    dff = dff.sort_index()
+    new_index = np.linspace(dff.index.min(),dff.index.max(),200)
+    dff = dff.reindex(new_index, method='nearest')
+    dff.plot(kind='hist', ax=axes, use_index=True, bins=10, legend=False,
+             normed=True, subplots=True)
+
+    axes[1].set_xlabel('Unschrunching (1/s)')
+    axes[1].set_ylabel('Weighted frequency')
+    axes[2].set_xlabel('Nucleotide addition cycle (1/s)')
+    axes[2].set_ylabel('Weighted frequency')
+    axes[0].set_xlabel('Escape rate(1/s)')
+    axes[0].set_ylabel('Weighted frequency')
+
+    f.tight_layout()
+    f.savefig(os.path.join('figures', 'estimated_rate_distribution' + '.pdf'))
+
+    # Print weighted mean and std of Nac and abort
+    nac_wmean, nac_wstd = weighted_avg_and_std(df['Nac'], weight)
+    abort_wmean, abort_wstd = weighted_avg_and_std(df['Abort'], weight)
+    escape_wmean, escape_wstd = weighted_avg_and_std(df['Escape'], weight)
+
+    print(abort_wmean, abort_wstd)
+    print(nac_wmean, nac_wstd)
+    print(escape_wmean, escape_wstd)
+
+
+def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
+                           initial_RNAP, sim_end, params, plot, log_name):
+
+    # So you can save dataframes to disk
+    dataframes = {}
+
+    # And use another weird way of logging the parameter results
+    fitness_log_file = os.path.join(log_dir, log_name+'.log')
+    log_handle = open(fitness_log_file, 'w')
     log_handle.write('Fit\tFit_extrap\tNac\tAbort\tEscape\n')
 
-    #plot = False
-    plot = True
-
-    #multiproc = True
-    multiproc = False
     if multiproc:
         pool = Pool(processes=2)
         results = []
     for nac, abrt, escape in params:
 
-        R = ITRates(its_variant, nac=nac, unscrunch=abrt, escape=escape, GreB_AP=True)
+        R = ITRates(its_variant, nac=nac, unscrunch=abrt, escape=escape, GreB_AP=GreB)
+        #R = ITRates(its_variant, nac=nac, unscrunch=abrt, escape=escape, GreB_AP=False)
 
         sim_name = get_sim_name(stoi_setup, its_variant)
 
@@ -157,8 +340,12 @@ def revyakin_datafit():
         else:
             model_ts = model.run()
             model_scrunches = calc_scrunch_distribution(model_ts, initial_RNAP)
-            plot_and_log_scrunch_comparison(plot, log_handle, model_scrunches,
-                                            initial_RNAP, nac, abrt, escape)
+            val, val_extrap = plot_and_log_scrunch_comparison(plot, log_handle,
+                                                              model_scrunches,
+                                                              initial_RNAP, nac,
+                                                              abrt, escape)
+
+            dataframes[(val, val_extrap)] = model_ts
 
     if multiproc:
         pool.close()
@@ -167,10 +354,16 @@ def revyakin_datafit():
         for ts, pars in zip(model_timeseries, params):
             nac, abrt, escape = pars
             ms = calc_scrunch_distribution(ts, initial_RNAP)
-            plot_and_log_scrunch_comparison(plot, log_handle, ms,
-                                            initial_RNAP, nac, abrt, escape)
+            val, val_extrap = plot_and_log_scrunch_comparison(plot, log_handle,
+                                                              ms, initial_RNAP,
+                                                              nac, abrt, escape)
+            dataframes[(val, val_extrap)] = ts
 
     log_handle.close()
+
+    #shelve_database = shelve.open(scrunch_db)
+    #shelve_database[log_name] = dataframes
+    #shelve_database.close()
 
 
 def plot_and_log_scrunch_comparison(plot, log_handle, model_scrunches, initial_RNAP,
@@ -185,6 +378,8 @@ def plot_and_log_scrunch_comparison(plot, log_handle, model_scrunches, initial_R
 
     if plot:
         plot_scrunch_distributions(model_scrunches, experiment, extrapolated, entry)
+
+    return val, val_extrap
 
 
 def get_experiment_scrunch_distribution():
@@ -203,14 +398,26 @@ def get_experiment_scrunch_distribution():
     x = np.asarray(df_measurements.index)
     y = df_measurements['inverse_cumul_experiment']
 
-    #df_measurements['inverse_cumul_experiment'] = df_measurements['inverse_cumul_experiment'][::-1]
-    #df_measurements.index = df_measurements.index[::-1]
+    def neg_exp(x, a):
+        return np.exp(-a*x)
 
-    #ff, axx = plt.subplots()
-    #df_measurements.plot(style='.', ax=axx)
+    popt, pcov = curve_fit(neg_exp, x, y)
 
-    #ff.savefig('othewaay.pdf')
-    #return
+    # Make some preductions from this simple model
+    xx = np.linspace(0, 40, 1000)
+    y_extrapolated = neg_exp(xx, popt[0])
+    df_extrapolated = pd.DataFrame(data={'extrap_inv_cumul':y_extrapolated}, index=xx)
+
+    return df_measurements, df_extrapolated
+
+
+def fit_to_distributions():
+
+    datapath = '/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/Revyakin 2006/Scrunch times.csv'
+
+    df_measurements = pd.read_csv(datapath, index_col='time')
+    x = np.asarray(df_measurements.index)
+    y = df_measurements['inverse_cumul_experiment']
 
     def neg_exp(x, a):
         return np.exp(-a*x)
@@ -264,8 +471,6 @@ def get_experiment_scrunch_distribution():
 
     plt.close(f)
 
-    return df_measurements, df_extrapolated
-
 
 def compare_scrunch_data(model, experiment, experiment_extrap):
     """
@@ -275,15 +480,15 @@ def compare_scrunch_data(model, experiment, experiment_extrap):
     # Get the values in the model closest to those in the experiment using
     # linear interpolation
     compare = pd.concat([model, experiment]).sort_index().\
-              interpolate().reindex(experiment.index)
+              interpolate(method='index').reindex(experiment.index)
 
     diff = np.abs(compare['inverse_cumul_experiment'] - compare['inverse_cumul_model'])
     distance = np.linalg.norm(diff)
 
     c_extr = pd.concat([model, experiment_extrap]).sort_index().\
-              interpolate().reindex(experiment_extrap.index)
+              interpolate(method='index').reindex(experiment_extrap.index)
 
-    # Ignore stuff before 0.5 seconds, it's impossible to go that fast,
+    # Ignore stuff before 0.5 seconds, it's hard to go that fast,
     # so there will always be nans in the beginning
     c_extr = c_extr[0.5:]
 
@@ -323,14 +528,12 @@ def plot_scrunch_distributions(model_scrunches, expt, expt_extrapolated,
                                title=''):
     """
     Now you are plotting the cumulative distribution function, but can you
-    also plot the probability density function? Start off with a histogram
+    also plot the probability density function? Start off with a histogram.
     """
 
     plot_expt = True
     fig_dir = 'figures'
 
-    # XXX take a break here. You need to figure out how to turn the image
-    # upside down to make a cumulative distribution function.
     expt['cumul_expt'] = 1 - expt['inverse_cumul_experiment']
     expt_extrapolated['cumul_expt_extrap'] = 1 - expt_extrapolated['extrap_inv_cumul']
     model_scrunches['cumul_model'] = 1 - model_scrunches['inverse_cumul_model']
@@ -401,6 +604,32 @@ def plot_scrunch_distributions(model_scrunches, expt, expt_extrapolated,
         plt.close(f)
 
 
+def get_kinetics(variant, GreB=False, nac=10.3, unscrunch=2.0, escape=7.9,
+                 escape_RNA_length=False, sim_end=300, initial_RNAP=100,
+                 return_hash=False):
+    """
+    Just want kinetics. Why don't you give it?
+    """
+
+    ITSs = data_handler.ReadData('dg100-new')
+    its = [i for i in ITSs if i.name == variant][0]
+
+    if escape_RNA_length is False:
+        escape_RNA_length = its.msat_calculated
+
+    stoi_setup = ktm.ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
+
+    R = ITRates(its, nac=nac, unscrunch=unscrunch, escape=escape, GreB_AP=GreB)
+
+    sim_name = get_sim_name(stoi_setup, its)
+
+    sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end)
+
+    model = ITModel(sim_setup)
+
+    return model
+
+
 def main():
     """
     ON parameter estimation. You found a good-looking package called SPOTPY
@@ -417,25 +646,13 @@ def main():
 
     #revyakin_datafit()
 
-    # XXX OK you are running simulations of estimating AP and you're logging
-    # the result. Now you need to get some numbers rolling! You will have to
-    # simulate up to maybe 5 minutes?
-    # XXX OK, to get a good match for the abortive, you seem to need a high AP
-    # for +2, but then you get a poor match for FL.
-    # Things to consider:
-    #   1) add the % of unproductive complexes to the parameter estimation
-    #   process
-    #   2) Consider that the productive APs may be quite different from the
-    #   nonproductive. Consider that for N25 after 0.5 minute, when
-    #   FL_1/2 has been reached, PY is around 35%. I think that when you
-    #   adjust AP, you also have to adjust the fraction of transcripts so that
-    #   full length ends up with more.
+    #simple_vo_2003_comprison()
 
-    # After getting a bit closer with estimation of the signature of
-    # productive transcripts, take stock of your situation. Count up the
-    # results you've got and what, if else, more you need.
+    # XXX not good :(
+    #revyakin_datafit_new()
 
-    productive_AP_estimate()
+    # XXX try again with more simple method?
+    #productive_AP_estimate()
 
     #results = 'simple_log.log'
 
@@ -443,12 +660,18 @@ def main():
 
     #df.sort('Fit', inplace=True)
 
+    #df = df[:50]
+
+    # Can we get the mean Nac and Mean Abort and Escape and std values
+    # weighted by the fit?
+
     #debug()
 
     # Plot normalized plots of the 2003 data
     #plot_2003_kinetics()
 
     #debug()
+
 
 
 def plot_2003_kinetics():
@@ -520,7 +743,6 @@ def productive_AP_estimate():
     parameter sampling and model running and model fitting and parameter
     analysis so it will be easier to get back to.
     """
-    #from productive_AP_setup_noclass import estimator_setup
     #from productive_AP_setup import estimator_setup
     from FL_2003_setup import estimator_setup
 
@@ -528,26 +750,25 @@ def productive_AP_estimate():
     variant_name = 'N25'
     ITSs = data_handler.ReadData('dg100-new')
     its_variant = [i for i in ITSs if i.name == variant_name][0]
-    initial_RNAP = 200
+    initial_RNAP = 500
     sim_end = 60. * 1.5
-    samples = 30
+    samples = 31
     processes = 2
-    batch_size = 31
-
-    # XXX OK you got some decent fits to the kinetic data as well, but the
-    # shape is not quite right. One approach can be to adjust the 2nt fraction
-    # to see if you get a better fit. But first, try to get batch mode up and
-    # running!
+    #batch_size = 15
+    batch_size = samples - 1
+    # XXX with my 8-core I could be 8 times as fast: 15 seconds instead of 2
+    # minutes wait. Yes plz.
 
     # Get observation data up to the duration of the simulation
-    N25_kinetic_ts = get_N25_kinetic_data(sim_end, method_nr=1)
+    N25_kinetic_ts = get_N25_kinetic_data(sim_end, method_nr=2)
 
-    estim_setup = estimator_setup(its_variant, initial_RNAP, sim_end, N25_kinetic_ts)
+    estim_setup = estimator_setup(its_variant, initial_RNAP, sim_end,
+                                  N25_kinetic_ts, escape_length=14)
 
-    # XXX NEXT get batch mode to work.
+    # why are all simulations suddenly having an end time of 90s?
     name = 'N25_AP_est'
-    rerun = True
-    #rerun = False
+    #rerun = True
+    rerun = False
     if rerun:
         sampler = parest.Parest(estim_setup, samples=samples, name=name,
                                 processes=processes, batch_size=batch_size)
@@ -556,17 +777,17 @@ def productive_AP_estimate():
     else:
         results = parest.load_results(name)
 
-    plot_results(estim_setup.observation(), results)
+    plot_APFL_results(estim_setup.observation(), results, estim_setup.parameters().keys())
 
 
-def plot_results(obs, results):
+def plot_APFL_results(obs, results, varied_parameters):
     """
     When comparing FL only, I think you need to normalize with max FL and not
     abortive. There are a lot of differences popping up for FL and NON FL. You
     should make two different setups.
     """
 
-    plot_top = 3
+    plot_top = 5
 
     # normalize for plotting
     # make into a pandas dataframe
@@ -575,7 +796,8 @@ def plot_results(obs, results):
     pars = results['parameters']
 
     # Pick the top 3 results
-    top_params = pars.sort('score')[:plot_top]
+    #top_params = pars.sort('score')[:plot_top]
+    top_params = pars.sort('median_ae')[:plot_top]
     # Extract timeseries
     ts = results['time_series']
 
@@ -592,11 +814,10 @@ def plot_results(obs, results):
     #joined = pd.concat([obs, top_ts], axis=1)
     # Do you need to join? can't you just plot both?
 
-    debug()
-
     # Build a list of labels
     labels = []
-    noscore = top_params.drop('score', axis=1)
+    #noscore = top_params.drop('score', axis=1)
+    noscore = top_params[varied_parameters + ['median_ae']]
     for sim_nr in top_params_sim_nr:
         par_vals = noscore.loc[sim_nr].to_dict()
         lab = ' '.join(['{0}: {1:.2f}'.format(k,v) for k,v in par_vals.items()])
@@ -634,10 +855,10 @@ def get_N25_kinetic_data(sim_end, method_nr=1):
     ts.rename(columns=ren, inplace=True)
 
     # Insert 0 as the firrst row (is this actually helpful?)
-    first_meas = pd.DataFrame(data={'Abortive experiment': 0.0,
-                                    'FL experiment': 0.0},
-                              index=[0.0])
-    first_meas.append(ts)
+    #first_meas = pd.DataFrame(data={'Abortive experiment': 0.0,
+                                    #'FL experiment': 0.0},
+                              #index=[0.0])
+    #first_meas.append(ts)
 
     # let there be 1 timestep more in model than in simulation
     t = ts[:sim_end-1]
@@ -682,14 +903,6 @@ def compare_timeseries(exper, model):
 
     # Normalize the model RNA to max abortive RNA
     model = model/model.max().max()
-
-    # Awesome! You've got them both normalized now. Perfect time to start some
-    # comparisons!!
-    # But, one issue. For the model you've got a lot more data very early.
-    # This is probably not usable.
-
-    # Reindex the model-dataset to the times that are available from the
-    # experimental data.
 
     # Get the values in the model closest to those in the experiment using
     # linear interpolation
