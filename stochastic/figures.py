@@ -4,19 +4,19 @@ import os
 import sys
 import pandas as pd
 import shelve
-import cPickle as pickle
-import hashlib
 sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/')
 sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/model')
 import data_handler
 import stochastic_model_run as smr
-import kinetic_transcription_models as ktm
 import matplotlib.pyplot as plt
+
 plt.ioff()
+
 import seaborn as sns
 from operator import attrgetter
 from ipdb import set_trace as debug  # NOQA
-from KineticRateConstants import RateConstants
+from scipy.interpolate import InterpolatedUnivariateSpline as interpolate
+from scipy.optimize import curve_fit
 
 # Global place for where you store your figures
 here = os.path.abspath(os.path.dirname(__file__))  # where this script is located
@@ -122,32 +122,19 @@ def CalculateTranscripts(model):
     return transcription_result
 
 
-def naive_initial_transcription_values():
+def initial_transcription_stats():
     """
     Run stochastic simulations on all the DG100 library variants
-
-    Hey, it is of course possible to get the kind of kinetic plot Lilian is
-    getting by simulating with let's say 1000 species and having a relatively
-    slow transition from an 'ether' state to RNAP000; in this way one would
-    see the abortive states generate more and more abortive product while FL
-    would increase only extremely slowly after a while.
-
-    But what I don't get from the Vo and unpublished kinetic data is why FL
-    stops all together.
     """
     ITSs = data_handler.ReadData('dg100-new')
     ITSs = sorted(ITSs, key=attrgetter('PY'))
 
-    backtrack_method = 'backstep'
-
     use_sim_db = True
     #use_sim_db = False
-    do_plot_timeseries = True
-    #do_plot_timeseries = False
-    plotme = ['RNAP000', 'RNAP8_b', 'RNAPflt']
+    #plot_species = [....]
 
-    screen = False
-    #screen = True
+    #screen = False
+    screen = True
     #subset = ['N25', 'N25-A1anti']
     subset = ['N25']
     #subset = ['N25-A1anti']
@@ -156,77 +143,42 @@ def naive_initial_transcription_values():
     all_rnas = {}
     all_FL_timeseries = {}
 
-    # Test making the abortive step dependent on length. How about 21-nt?
-    #abortive_method = 'simple_length_dependent'
-    abortive_method = False
-
-    # SHIT! The values are now a perfect match. And the kinetics seems much
-    # better as well. How weird that the previous results have totally
-    # vanished
-
     for its in ITSs:
         ## Filter out some specific ones
         if screen and its.name not in subset:
             continue
 
-        # Use an MSAT calculated from the position after which 0.1% of
-        # transcript remains. This makes N25 escape at +14, but is a more fair
-        # method. Alternatively use 1%, and N25 returns to +11, but others
-        # reduce their value.
-        msat = its.calculated_msat
-        reaction_setup = ktm.ReactionSystemSetup(backtrack_method, escape_start=msat,
-                                                 final_escape_RNA_length=msat,
-                                                 abortive_end=msat,
-                                                 abort_method=abortive_method)
+        model = smr.get_kinetics(variant=its.name)
+        sim_id = model.calc_setup_hash()
+        break
 
-        rate_constants = RateConstants(variant=its.name, use_AP=True, nac=10,
-                                       abortive=30, to_fl=10, dataset=ITSs)
-
-        sim_setup = smr.SimSetup(initial_RNAP=200, nr_trajectories=1, sim_end=240)
-
-        setup = {'reaction_setup': reaction_setup,
-                 'rate_constants': rate_constants,
-                 'simulation_setup': sim_setup}
-
-        # serialize to a string and make a hash
-        setup_serialized = pickle.dumps(setup)
-        sim_id = hashlib.md5(setup_serialized).hexdigest()
-        print(sim_id)
-
-        # Shit, "cannot pickle code objects", so cannot store entire sim
-        # (maybe you don't want to?).
-        # For now, just save the post-processed results ts.
         shelve_database = shelve.open(simulation_storage)
         if use_sim_db and sim_id in shelve_database:
             db_entry = shelve_database[sim_id]
-            nr_rna = db_entry['nr_rna']
-            FL_timeseries = db_entry['FL_ts']
+            ts = db_entry[sim_id]
         else:
-            sim = smr.Run(rate_constants.variant, rate_constants, reaction_setup, sim_setup)
-            nr_rna = CalculateTranscripts(sim)
-            FL_timeseries = GetFLTimeseries(sim)
-            # XXX I just found a bug: you also need to includ the .psc file in
-            # the hdf5 calculation, otherwise some changes will not be deteted
-
-            # Overwrite database for identical hash
-            shelve_database[sim_id] = {'nr_rna': nr_rna,
-                                       'FL_ts': FL_timeseries}
-
-            if do_plot_timeseries:
-                plot_timeseries(rate_constants.variant, sim, plotme)
-
+            ts = model.run()
+            shelve_database[sim_id] = ts
         shelve_database.close()
+
+        #if do_plot_timeseries:
+            #plot_timeseries(its.name, ts, species)
+
+        nr_rna = ts.iloc[-1].values
+        FL_timeseries = ts['FL'].values
 
         all_rnas[its.name] = nr_rna
         all_FL_timeseries[its.name] = FL_timeseries
 
         # XXX Make the basic bar plots
+        # XXX This is pretty useless now: the results are identical to the RNA
+        # fractions (thankfully!).
         #write_bar_plot(nr_rna, its)
 
     #XXX BOX, BAR, AND PY-distribution PLOTs XXX
     # Divide itss into high and low and analyse
     #dsetmean = np.mean([i.PY for i in ITSs])
-    #for partition in ['low PY', 'high PY', 'all']:
+    for partition in ['low PY', 'high PY', 'all']:
 
         #if partition == 'low PY':
             #low_ITSs = [i for i in ITSs if i.PY < dsetmean]
@@ -236,8 +188,8 @@ def naive_initial_transcription_values():
             #high_ITSs = [i for i in ITSs if i.PY >= dsetmean]
             #write_box_plot(high_ITSs, all_rnas, title=partition)
 
-        #if partition == 'all':
-            #write_box_plot(ITSs, all_rnas, title=partition)
+        if partition == 'all':
+            write_box_plot(ITSs, all_rnas, title=partition)
 
     #XXX NEW AP XXX
     # Calculate AP anew!
@@ -332,83 +284,40 @@ def AP_recalculated(ITSs, all_rnas):
         plt.close(fig)
 
 
-def plot_timeseries(name, sim, plotme):
+def plot_timeseries(name, ts, species):
     """
     Just plot timeseries data.
     """
 
-    sp_2_label = {'RNAPpoc': 'Productive open complex',
-                  'RNAPuoc': 'Unproductive open complex',
-                  'RNAPflt': 'Full length transcript',
-                  'RNAP2_b': '2nt abortive RNA',
-                  'RNAP3_b': '3nt abortive RNA',
-                  'RNAP4_b': '4nt abortive RNA',
-                  'RNAP6_b': '6nt abortive RNA',
-                  'RNAP7_b': '7nt abortive RNA',
-                  'RNAP8_b': '8nt abortive RNA'
-                  }
+    pass
 
-    data = {}
-    simulated_species = sim.data_stochsim.species_labels
+    #sp_2_label = {'RNAPpoc': 'Productive open complex',
+                  #'RNAPuoc': 'Unproductive open complex',
+                  #'RNAPflt': 'Full length transcript',
+                  #'RNAP2_b': '2nt abortive RNA',
+                  #'RNAP3_b': '3nt abortive RNA',
+                  #'RNAP4_b': '4nt abortive RNA',
+                  #'RNAP6_b': '6nt abortive RNA',
+                  #'RNAP7_b': '7nt abortive RNA',
+                  #'RNAP8_b': '8nt abortive RNA'
+                  #}
 
-    # If no species are specified, plot them all
-    if plotme is False:
-        plotme = simulated_species
+    # f, ax = plt.subplots()
+    #ts[species].plot()
 
-    for sp_name in plotme:
+    #ax.set_ylabel('# of species')
+    #ax.set_xlabel('Time (seconds)')
 
-        # Gracefully skip variables not modelled
-        if sp_name not in simulated_species:
-            continue
+    #file_name = 'Timeseries_{0}.pdf'.format(name)
 
-        sp_index = simulated_species.index(sp_name)
-        sp = np.array(sim.data_stochsim.species, dtype=np.int32)
+    #file_path = os.path.join(fig_dir1, file_name)
 
-        # FL is additative so we keep the whole timeseries
-        # Open complex should just reflect what is provided: number of species
-        # at eacah time point
-        if sp_name in ['RNAPflt', 'RNAPpoc', 'RNAPuoc']:
-            ts = sp[:, sp_index]
-        # But for #RNA, we need to take a the diff after in the backstepped
-        # state - before we get instantaneous numbers
-        else:
+    #f.suptitle('Stochastic simulation of initial transcription for {0}'.format(name))
+    #f.tight_layout()
+    #f.savefig(file_path, format='pdf')
 
-            ts = sp[:-1, sp_index] - sp[1:, sp_index]
-            # Find -change in #species each timestep (+1 = aborted RNA, -1 = backtracked)
-            change = sp[:-1,sp_index] - sp[1:,sp_index]
-            # Set to zero those values that represent entry into the backstepped state
-            change[change==-1] = 0
-            # Get timeseries of # abortive RNA
-            ts = np.cumsum(change)
-            # We lose the first timestep. It's anyway impossive to produce an
-            # abortive RNA in the first timestep. So pad a 0 value to the
-            # array.
-            ts = np.insert(ts, 0, 0)
-
-        data[sp_2_label[sp_name]] = ts
-
-    df = pd.DataFrame(data, index=sim.data_stochsim.time)
-    # Drop duplicate lines?
-    #df = df.drop_duplicates()
-    # with 3 species dfd it's about 10 times smaller than df
-    # Compared to full species array, dfd is 100 times smaller.
-
-    f, ax = plt.subplots()
-    df.plot(ax=ax)
-
-    ax.set_ylabel('# of species')
-    ax.set_xlabel('Time (seconds)')
-
-    file_name = 'Timeseries_{0}.pdf'.format(name)
-
-    file_path = os.path.join(fig_dir1, file_name)
-
-    f.suptitle('Stochastic simulation of initial transcription for {0}'.format(name))
-    f.tight_layout()
-    f.savefig(file_path, format='pdf')
-
-    # Explicitly close figure to save memory
-    plt.close(f)
+    ## Explicitly close figure to save memory
+    #plt.close(f)
 
 
 def GetFLTimeseries(sim):
@@ -724,7 +633,7 @@ def calc_pct_model(ts, data_range):
     return np.append(pct_RNA_model, pct_FL_model)
 
 
-def write_bar_plot(ts, its):
+def write_bar_plot(nr_rna, its):
     """
     There is a clear trend where the amount of abortive RNA is lower in the
     model < +9/10 and slightly higher in the model after +9/10 (except for +6).
@@ -748,8 +657,8 @@ def write_bar_plot(ts, its):
 
     data_range = range(2, 21)
 
-    pct_values_experiment = pct_experiment(its)
-    pct_values_model = calc_pct_model(ts, data_range)
+    pct_values_experiment = 100. * its.fraction
+    pct_values_model = 100. * nr_rna / nr_rna.sum()
 
     # Prepare for making a dataframe
     forDF = {'Experiment': pct_values_experiment,
@@ -861,14 +770,127 @@ def AP_and_pct_values_distributions_DG100():
     plt.close(f)
 
 
+def get_2003_FL_kinetics(method=1):
+
+    data ='/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/vo_2003'
+    m1 = os.path.join(data, 'Fraction_FL_and_abortive_timeseries_method_1_FL_only.csv')
+    m2 = os.path.join(data, 'Fraction_FL_and_abortive_timeseries_method_2_FL_only.csv')
+
+    # Read up to 10 minutes
+    df1 = pd.read_csv(m1, index_col=0)[:10]
+    df2 = pd.read_csv(m2, index_col=0)[:10]
+
+    # Multiply by 60 to get seconds
+    df1.index = df1.index * 60
+    df2.index = df2.index * 60
+
+    # Normalize
+    df1_norm = df1/df1.max()
+    df2_norm = df2/df2.max()
+
+    # Add initial 0 value
+    df1_first = pd.DataFrame(data={'FL halted elongation': 0.0}, index=[0.0])
+    df1_final = df1_first.append(df1_norm)
+
+    df2_first = pd.DataFrame(data={'FL competitive promoter': 0.0}, index=[0.0])
+    df2_final = df2_first.append(df2_norm)
+
+    #debug()
+    if method == 1:
+        return df1_final['FL halted elongation']
+    elif method == 2:
+        return df2_final['FL competitive promoter']
+    else:
+        print('No more methods in that paper!')
+
+
+def fit_FL(x, y):
+    """
+    Assumes FL growth can be fitted to y = a + b(1-exp(-cx))
+    """
+
+    def saturation(x, a, b, c):
+        return a + b*(1 - np.exp(-c*x))
+
+    popt, pcov = curve_fit(saturation, x, y)
+
+    # Make some preductions from this simple model
+    xx = np.linspace(x.min(), x.max(), 1000)
+    yy = saturation(xx, *popt)
+
+    return xx, yy
+
+
+def simple_vo_2003_comprison():
+    """
+    Purpose is to plot the performance on N25 GreB- and compare with Vo 2003
+    data from both quantitations. Show quantitations as dots but also
+    interpolate to make them look nicer.
+    """
+
+    # FL kinetics for 1 and 2.
+    m1 = get_2003_FL_kinetics(method=1)
+
+    # FL kinetics for model with GreB+/-
+    greb_plus = smr.get_kinetics(variant='N25', GreB=True, escape_RNA_length=14)['FL']
+    gp = greb_plus / greb_plus.max()
+
+    greb_minus = smr.get_kinetics(variant='N25', GreB=False, escape_RNA_length=14)['FL']
+    gm = greb_minus / greb_minus.max()
+
+    # Plot 2003 data
+    f1, ax = plt.subplots()
+    m1.plot(ax=ax, style='.', color='g')
+
+    # Fit 2003 data and calculate half life
+    xnew, ynew = fit_FL(m1.index, m1.values)
+    fit = pd.DataFrame(data={'Vo et. al': ynew}, index=xnew)
+    fit.plot(ax=ax, color='b')
+
+    # Get the halflife of full length product
+    f_vo = interpolate(ynew, xnew, k=1)
+    thalf_vo = float(f_vo(0.5))
+
+    # Plot and get halflives of GreB-
+    gm.plot(ax=ax, color='c')
+    #f_gm = interpolate(gm.values, gm.index, k=2)
+    #thalf_grebminus = f_gm(0.5)
+    idx_gm = gm.tolist().index(0.5)
+    thalf_grebminus = gm.index[idx_gm]
+
+    # Plot and get halflives of GreB+
+    gp.plot(ax=ax, color='k')
+    #f_gp = interpolate(gp.values, gp.index, k=2)
+    #thalf_grebplus = f_gp(0.5)
+    idx_gp = gp.tolist().index(0.5)
+    thalf_grebplus = gp.index[idx_gp]
+
+    labels = ['Vo et. al GreB- measurements',
+              r'Vo et. al GreB- fit $t_{{1/2}}={0:.2f}$'.format(thalf_vo),
+              r'Simulation GreB- $t_{{1/2}}={0:.2f}$'.format(thalf_grebminus),
+              r'Simulation GreB+ $t_{{1/2}}={0:.2f}$'.format(thalf_grebplus)]
+
+    ax.legend(labels, loc='lower right', fontsize=15)
+
+    ax.set_xlabel('Time (seconds)', size=15)
+    ax.set_ylabel('Fraction of full length transcript', size=15)
+
+    ax.set_xlim(0, 70)
+    ax.set_ylim(0, 1.01)
+    f1.savefig('GreB_plus_and_GreB_minus_kinetics.pdf')
+
+
 def main():
 
     # Distributions of % of IQ units and #RNA
-    #naive_initial_transcription_values()
+    initial_transcription_stats()
 
     # Remember, you are overestimating PY even if there is no recycling. Would
     # recycling lead to higher or lower PY? I'm guessing lower.
-    AP_and_pct_values_distributions_DG100()
+    #AP_and_pct_values_distributions_DG100()
+
+    # Result
+    #simple_vo_2003_comprison()
 
 
 if __name__ == '__main__':
