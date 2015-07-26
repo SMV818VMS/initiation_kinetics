@@ -111,15 +111,14 @@ class estimator_setup(object):
 
         # Precalculate this value for comparison with model results
         init_2nt = self.its_variant.fraction[0]
-        new_2nt = uniform(0.20, 0.3)
 
-        diff = init_2nt - new_2nt
+        diff = init_2nt - frac_2nt
 
         # update fl fraction with the difference
         new_fl_fraction = self.init_fraction[-1] + diff
 
         new_fraction = np.copy(self.init_fraction)
-        new_fraction[0] = new_2nt
+        new_fraction[0] = frac_2nt
         new_fraction[-1] = new_fl_fraction
 
         assert new_fraction.sum() <= 1

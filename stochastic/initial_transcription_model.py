@@ -6,6 +6,7 @@ import kinetic_transcription_models as ktm
 from ipdb import set_trace as debug  # NOQA
 
 from collections import OrderedDict
+from copy import deepcopy
 
 import stochpy
 import numpy as np
@@ -77,11 +78,10 @@ class ITModel(object):
 
         import cPickle as pickle
         import hashlib
-        # serialize to a string and make a hash
-        # But you need to make a copy without the path to psc.
-        setupcopy = copy(self.setup)
-        setup_serialized = pickle.dumps(self.setup)
-        print setup_serialized
+        # Remove reference to .psc file before hashing setup
+        setupcopy = deepcopy(self.setup)
+        del setupcopy.model_psc_input
+        setup_serialized = pickle.dumps(setupcopy)
         return hashlib.md5(setup_serialized).hexdigest()
 
     def run(self):

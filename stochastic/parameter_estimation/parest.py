@@ -108,10 +108,45 @@ class Parest(object):
 
         # Initialize variames that will hold dataframes
         self.parameter_frame = -1
-        self.result_frame = -1
+        self.timeseries_frame = -1
 
         # Track time
         self._init_time = time.time()
+
+    def _search(self, ctrl, iterated_parameters, nr_samples):
+
+        for sim in range(nr_samples):
+            self.sim_nr +=1
+            if iterated_parameters is False:
+                params = self.parameters()  # initial parameters
+            else:
+                params = iterated_parameters
+
+            ctrl.addSimulation(self.sim_nr, params)
+
+        ctrl.runSimulations()
+
+    def _evaluate_search(self, ctrl):
+
+        par_data = defaultdict(list)
+        ts_data, par_index = {}, []
+        for sim_nr, sim_result, params_used in ctrl.getSimulations():
+            # New requirement: sim_result should return a dataframe
+            ts_data[sim_nr] = sim_result['model']
+            par_index.append(sim_nr)
+            scores = self.evaluate(sim_result, self.observed)
+            for score_name, score in scores.items():
+                par_data[score_name].append(score)
+            for name, val in params_used.items():
+                par_data[name].append(val)
+
+        # Generate dataframes
+        # should be as general as possible inside the parest routine. It
+        # should know as little as possible about the outside world.
+        par_frame = frame(data=par_data, index=par_index)
+        ts_frame = frame(data=ts_data)
+
+        return par_frame, ts_frame
 
     def search(self, iterated_parameters=False):
         """
@@ -127,53 +162,29 @@ class Parest(object):
         """
 
         nr_samples = self._get_nr_samples()
-        if nr_samples is 0:
-            print("End of simulation")
-            return
+        print('beg nr_samples', nr_samples)
 
-        # Do parallell runs even if you only run with 1 processor; your runs
-        # are so long that the overhead does not matter
-        ctrl = _Controller(self.procs, self.simulation)
+        # Launch parameter searches
+        controller = _Controller(self.procs, self.simulation)
+        self._search(controller, iterated_parameters, nr_samples)
 
-        for sim in range(nr_samples):
-            self.sim_nr +=1
-            # Get parameters (bad to test every time in here; but avoid perfection for now)
-            if iterated_parameters is False:
-                params = self.parameters()  # initial parameters
-            else:
-                params = iterated_parameters
+        # Extract results and compare
+        par_frame, ts_frame = self._evaluate_search(controller)
 
-            # Find new abortive probability with updated RNA fraction
-            ctrl.addSimulation(self.sim_nr, params)
+        # Add results to previous
+        self._concatenate_results(par_frame, ts_frame)
 
-        ctrl.runSimulations()
+        if self._continue_searching():
+            parameter_range = self._new_parameter_ranges(par_frame)
+            self.search(parameter_range)
 
-        # Extract results from multicore processing
-        par_data = defaultdict(list)
-        res_data, index = {}, []
-        for sim_nr, sim_result, params_used in ctrl.getSimulations():
-            #print results
-            index.append(sim_nr)
-            score = self.evaluate(sim_result, self.observed)
-            res_data[sim_nr] = sim_result
-            par_data['score'].append(score)
-            for name, val in params_used.items():
-                par_data[name].append(val)
-
-        # Generate dataframes
-        par_frame = frame(data=par_data, index=index)
-        res_frame = frame(data=res_data, index=self.observed.index)
-
-        # Add new results to previous, if any.
-        self._concatenate_results(par_frame, res_frame)
-
+    def _continue_searching(self):
         # If we still have more simulations to perform
         if self.sim_nr < self.samples:
-            #updated_parameter_range = self._new_parameter_ranges(par_frame)
-            updated_parameter_range = False
-            # Recursive call
-            self.search(updated_parameter_range)
+            return True
         else:
+            duration = time.time() - self._init_time
+            print('End of parameter search. Duration: {0}'.format(duration))
             self._store_results()
 
     def _store_results(self):
@@ -187,19 +198,15 @@ class Parest(object):
 
         # Simulation results
         results_path = _get_result_path(self.name)
-        self.result_frame.to_csv(results_path, sep='\t')
-
-    def _run_multicore(self, sim_nr, f, par):
-        """
-        Keep track of simulation number for multicore runs.
-        """
-        return sim_nr, f(par)
+        self.timeseries_frame.to_csv(results_path, sep='\t')
 
     def _get_nr_samples(self):
         """
         Find how many rounds of sampling should be performed for this instance
         """
-        if self.samples < 2 * self.bsize:
+        # Disable this while debugging
+        #if self.samples < 2 * self.bsize:
+        if self.samples < 1 * self.bsize:
             print("Single run: sample size too small for batches")
             nr_samples = self.samples - self.sim_nr
         else:
@@ -212,29 +219,31 @@ class Parest(object):
 
         return nr_samples
 
-    def _concatenate_results(self, par_frame, res_frame):
+    def _concatenate_results(self, par_frame, ts_frame):
         """
-        Add results to previous results if they exist.
+        Add results to previous results if they exist. Join parameters by the
+        index (simulation number) and timeseries
         """
         if par_frame.index[0] == 1:
             self.parameter_frame = par_frame
-            self.result_frame = res_frame
+            self.timeseries_frame = ts_frame
         else:
-            self.parameter_frame = concat(self.parameter_frame, par_frame)
-            self.result_frame = concat(self.result_frame, res_frame)
+            self.parameter_frame = concat([self.parameter_frame, par_frame], axis=0)
+            self.timeseries_frame = concat([self.timeseries_frame, ts_frame], axis=1)
+
+            debug()
 
     def _new_parameter_ranges(self, par_frame):
         """
         Use results from the previous batch to find parameter ranges for the
         next batch.
         """
+        #debug()
         return False
 
     def get_results(self):
-        duration = time.time() - self._init_time
-        print('Parameter search duration: {0}'.format(duration))
         return {'parameters': self.parameter_frame,
-                'time_series': self.result_frame}
+                'time_series': self.timeseries_frame}
 
 
 def load_results(name):
@@ -247,13 +256,13 @@ def load_results(name):
 
     # simulation results
     results_path = _get_result_path(name)
-    result_frame = read_csv(results_path, sep='\t', index_col=0)
+    timeseries_frame = read_csv(results_path, sep='\t', index_col=0)
 
     # You want the columns to be ints
-    result_frame.columns = [int(i) for i in result_frame.columns]
+    timeseries_frame.columns = [int(i) for i in timeseries_frame.columns]
 
     return {'parameters': parameter_frame,
-            'time_series': result_frame}
+            'time_series': timeseries_frame}
 
 
 def _get_param_path(name):
