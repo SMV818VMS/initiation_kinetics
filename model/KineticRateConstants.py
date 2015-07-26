@@ -22,8 +22,11 @@ class ITRates(object):
 
         # These have to be present
         self.abortive_prob = its_variant.abortive_prob
-        self.unproductive_ap = its_variant.N25_unproductive_ap
-        self.greb_abortive_prob = its_variant.abortive_prob_GreB
+
+        # N25 has some extras
+        if self.name == 'N25':
+            self.unproductive_ap = its_variant.N25_unproductive_ap
+            self.greb_abortive_prob = its_variant.abortive_prob_GreB
 
     def _GetAP(self, rna_length, unproductive=False):
 

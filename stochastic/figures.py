@@ -133,10 +133,10 @@ def initial_transcription_stats():
     #use_sim_db = False
     #plot_species = [....]
 
-    #screen = False
-    screen = True
-    #subset = ['N25', 'N25-A1anti']
-    subset = ['N25']
+    screen = False
+    #screen = True
+    subset = ['N25', 'N25-A1anti']
+    #subset = ['N25']
     #subset = ['N25-A1anti']
 
     # Keep all rnas to make a box plot after.
@@ -150,12 +150,10 @@ def initial_transcription_stats():
 
         model = smr.get_kinetics(variant=its.name)
         sim_id = model.calc_setup_hash()
-        break
 
         shelve_database = shelve.open(simulation_storage)
         if use_sim_db and sim_id in shelve_database:
-            db_entry = shelve_database[sim_id]
-            ts = db_entry[sim_id]
+            ts = shelve_database[sim_id]
         else:
             ts = model.run()
             shelve_database[sim_id] = ts
@@ -616,21 +614,11 @@ def pct_experiment(its):
 
 
 def calc_pct_model(ts, data_range):
+    """
+    Ts must be an array with abortives from 2 to 20 and the FL
+    """
 
-    total_RNA_model = sum(ts.values()) + ts['FL']
-
-    RNA_model = []
-    for pos in data_range:
-        k = str(pos)
-        if k in ts:
-            RNA_model.append(ts[k])
-        else:
-            RNA_model.append(0)
-
-    pct_RNA_model = np.array(RNA_model) * 100. / total_RNA_model
-    pct_FL_model = ts['FL'] * 100. / total_RNA_model
-
-    return np.append(pct_RNA_model, pct_FL_model)
+    return 100 * ts / ts.sum()
 
 
 def write_bar_plot(nr_rna, its):
