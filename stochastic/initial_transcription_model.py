@@ -78,9 +78,11 @@ class ITModel(object):
 
         import cPickle as pickle
         import hashlib
-        # Remove reference to .psc file before hashing setup
+        # Remove reference to .psc file (varying)
         setupcopy = deepcopy(self.setup)
         del setupcopy.model_psc_input
+        # Read the content of the .psc file instead! (unique!)
+        setupcopy.psc_content = open(self.psc_file, 'r').readlines()
         setup_serialized = pickle.dumps(setupcopy)
         return hashlib.md5(setup_serialized).hexdigest()
 
@@ -109,9 +111,6 @@ class ITModel(object):
     def _calc_timeseries(self, sim):
         """
         Returns a Pandas dataframe for all RNA species.
-
-        In the future, you may wish to get the raw data as well to plot the
-        distribution of duration of RNAP in different states.
         """
 
         species_names = ['rna_{0}'.format(i) for i in range(2,21)] + ['FL']
@@ -138,12 +137,16 @@ class ITModel(object):
             if type(ts) is np.ndarray:
                 data[species] = ts
             elif type(ts) is int:
-                data[species] = 0  # this is a bit wasteful, but whaev.
+                data[species] = np.zeros(len(time), dtype=np.int16)
             else:
                 print('What?')
                 1/0
 
         df = pd.DataFrame(data=data, index=time)
+
+        # Testing what happens when dropping duplicates. This is good for long
+        # simulations: you can get a 10-fold decrease in size.
+        df = df.drop_duplicates()
 
         return df
 
