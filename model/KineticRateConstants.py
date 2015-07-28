@@ -76,7 +76,11 @@ class ITRates(object):
         return self.escape
 
     def ToFL(self):
-        return self.to_fl
+        """
+        Aimed at Vo et al where there is a 50-15 = 35 nt stretch after
+        promoter escape until runoff.
+        """
+        return 10. / 35.
 
     def Unscrunch(self):
         return self.unscrunch

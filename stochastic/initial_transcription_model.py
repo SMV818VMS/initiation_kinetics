@@ -86,11 +86,14 @@ class ITModel(object):
         setup_serialized = pickle.dumps(setupcopy)
         return hashlib.md5(setup_serialized).hexdigest()
 
-    def run(self):
+    def run(self, *args, **kwargs):
+        """
+        Run and pass on any parameters to the timeseries calculation method
+        """
 
         sim = self._runStochPy(self.nr_traj, self.duration, self.psc_file)
 
-        return self._calc_timeseries(sim)
+        return self._calc_timeseries(sim, *args, **kwargs)
 
     def _runStochPy(self, nr_traj, duration, psc_file):
         """
@@ -108,7 +111,7 @@ class ITModel(object):
 
         return mod
 
-    def _calc_timeseries(self, sim):
+    def _calc_timeseries(self, sim, include_elongation=False):
         """
         Returns a Pandas dataframe for all RNA species.
         """
@@ -117,7 +120,8 @@ class ITModel(object):
 
         #species_names += ['productive open complex']
         #species_names += ['unproductive open complex']
-        #species_names += ['elongating complex']
+        if include_elongation:
+            species_names += ['elongating complex']
 
         model_names = sim.data_stochsim.species_labels
 

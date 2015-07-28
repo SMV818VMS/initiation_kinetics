@@ -79,41 +79,58 @@ def bai_rates(nuc, NTP, EC):
     return nac2
 
 
-def uniform_sample(a, b, nr_samples):
-    return np.random.sample(nr_samples) * (b - a) + a
-
-
-def get_estim_parameters(method='manual', samples=10):
+def get_parameters(method='uniform', samples=10, GreB=True):
     """
-    Ideally you'd like for this to be iteratively. For now, just test simply.
-    method: manual, uniform, normal
-    If method == normal, must provide center of distribution and variance
-
-    For N25 with escape at 14, with 0 ap the last 3 steps, and with GreB+ APs,
-    the best fit seems to be around Nac=9.1, abort = 1.6, and Escape= ca 5.
+    For Revyakin data you got a similar result for stepwise and uniform
+    parameter sampling
     """
     from numpy.random import uniform
 
     params = []
-    if method == 'manual':
+    if method == 'stepwise':
         for nac in np.linspace(2.5, 10, 5):
             for abortive in [nac/i for i in [2, 4, 8]]:
                 for escape in [nac, nac/2, nac/10.]:
                     params.append((nac, abortive, escape))
 
-    # OK, even with this way of sampling I'm arriving to the same answer more
-    # or less like last time. That's good. The lack of correlation could be
-    # because we're already close to the optimum.
     elif method == 'uniform':
-        #for nac in uniform_sample(5, 12, 4):
-            #for abortive in uniform_sample(1.5, 6.5, 4):
-                #for escape in uniform_sample(3.5, 7.5, 4):
-                    #params.append((nac, abortive, escape))
+
+        # XXX what, a nac of 21.5 even with GreB? Yeah, abortive adjusts
+        # itself to be fast enough, and escape goes fast too. So abortive and
+        # nac reactions find an optimum when they are very fast both. Fuck
+        # damn. You need to look at some plots.
+        #abr_min, abr_max = (1, 6)
+        #esc_min, esc_max = (0.1, 15)
+        #if GreB:
+            #nac_min, nac_max = (5, 15)
+        #else:
+            #nac_min, nac_max = (5, 25)
 
         for sample_nr in range(samples):
-            nac = uniform(5, 15)
-            abortive = uniform(1, 6)
-            escape = uniform(0.1, 15)
+             #XXX 1st iteration
+            #abortive = uniform(1, 25)
+            #nac = uniform(5, 25)
+            #escape = uniform(0.1, 25)
+
+            # XXX 2nd iteration (using mean +/- std of 10% of the best results)
+            #abortive = uniform(0.3, 15.3)
+            #nac = uniform(5, 16)
+            #escape = uniform(5.4, 19)
+
+            # XXX 3nd iteration (as above)
+            #abortive = uniform(0.6, 5.2)
+            #nac = uniform(6.6, 12.6)
+            #escape = uniform(6.5, 15.5)
+
+            # XXX 4th iteration (as above)
+            #abortive = uniform(1.3, 2.1)
+            #nac = uniform(8.6, 11.2)
+            #escape = uniform(9.2, 14.8)
+
+             #XXX 1st iteration GreB minus
+            abortive = uniform(1, 25)
+            nac = uniform(5, 25)
+            escape = uniform(0.1, 25)
 
             params.append((nac, abortive, escape))
 
@@ -197,6 +214,9 @@ def plot_scrunch(obs, results, param_names):
     top_params_sim_nr = top_params.index
     top_ts = ts[top_params_sim_nr]
 
+    print pars_sorted_nofit
+    print top_ts
+
     # For this in that, plot it.
     debug()
 
@@ -220,25 +240,87 @@ def revyakin_datafit():
     paint a picture of the variability in the process. But who is to say that
     the stochastichness in the stochastic simulations (which are based on
     particle collision theory ...) is correct for initial transcription?
+
+    When you run with an open parameter space (0 to 25) you get the following:
+
+    200-RNAP_200-samples_True-GreB_scrunch
+    ('abort', 8.0746941896014945, 7.2930057116007667)
+    ('nac', 10.437303410995096, 5.5298816304097986)
+    ('escape', 12.250466735166571, 6.8438807367664403)
+    Top 5 fits
+    44     0.118664
+    136    0.166963
+    110    0.196453
+    155    0.200687
+    163    0.213698
+
+    When you use the weighted mean +/- weighted std to limit the next run you get the following:
+
+    ('abort', 2.9103208528467666, 2.2715841910551893)
+    ('nac', 9.602162622646766, 3.0303177750109334)
+    ('escape', 10.931500559510905, 4.6292808482572836)
+    Top 5 fits
+    4     0.101838
+    57    0.138797
+    55    0.145980
+    64    0.159739
+    98    0.172820
+
+    When you again run with the mean +/- std for the next run you get the
+    following:
+    200-RNAP_200-samples_True-GreB_scrunch
+    ('abort', 1.6893704779076408, 0.36894418529195627)
+    ('nac', 9.8950165297118176, 1.2443237642078515)
+    ('escape', 12.013074849879132, 2.8256648254339964)
+    Top 5 fits
+    5      0.063654
+    27     0.078444
+    59     0.081511
+    3      0.088815
+    170    0.105785
+
+    And the fourth iteration:
+    ('abort', 1.5762881999535692, 0.13886299818608847)
+    ('nac', 10.043743507251243, 0.63940817558655716)
+    ('escape', 11.843573613785063, 1.7153370690102836)
+    Top 5 fits
+    73    0.070184
+    3     0.073702
+    31    0.075871
+    59    0.075952
+    75    0.076597
+
+    The heuristic of rerunning with weighted mean and weighted std works just
+    great. You could repeat the process until there is no more than 5%
+    variation in goodness of fit for the top the 5% of samples.
+
+    And then, how does one calculate the damn confidence interval? It's not
+    easy to say. You found a thesis on the topic, located in /home/jorgsk.
+
+    For the nonce, just provide the weighted standard deviations for the last
+    round of simulations.
     """
 
     # Setup
     variant_name = 'N25'
     ITSs = data_handler.ReadData('dg100-new')
     its_variant = [i for i in ITSs if i.name == variant_name][0]
-    initial_RNAP = 100
+    initial_RNAP = 200
     sim_end = 1000
-    samples = 1000
+    samples = 200
+    escape_RNA_length=14
+    #GreB = False
     GreB = True
-    params = get_estim_parameters(method='uniform', samples=samples)
+
+    params = get_parameters(method='uniform', samples=samples, GreB=GreB)
     #params = [(9.2, 1.6, 5)]  # the golden params
     #params = [(12, 1.3, 6)]  # new golden params?
-    stoi_setup = ktm.ITStoichiometricSetup(escape_RNA_length=12)
+    stoi_setup = ktm.ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
 
     log_name = '{0}-RNAP_{1}-samples_{2}-GreB_scrunch'.format(initial_RNAP, samples, GreB)
 
-    #calculate = True
-    calculate = False
+    calculate = True
+    #calculate = False
 
     plot = False
     #plot = True
@@ -250,22 +332,23 @@ def revyakin_datafit():
         search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
                                initial_RNAP, sim_end, params, plot, log_name)
     else:
-        weighted_parameter_distributions(log_name)
+        get_weighted_parameter_distributions(log_name)
 
 
-def weighted_parameter_distributions(log_name):
+def get_weighted_parameter_distributions(log_name):
 
-    top = 100
+    top = 20
 
     fitness_log_file = os.path.join(log_dir, log_name+'.log')
     df = pd.read_csv(fitness_log_file, sep='\t', header=0)
 
     df.sort('Fit', inplace=True)
 
-    # XXX The picture looks good except for this one outlier at 14 which had a
-    # good score which made all the rest look really bad. Assume that such an
-    # outlier won't be there when you do the full set.
-    df = df.drop(384)
+    # When you "release" the parameter values you see some pretty wild values.
+    # For example, nac =5 and abort = 20; or nac=19, abort=14 and escape=0.5.
+    # It's clear that these parameters depend on and affect each other. Gotta
+    # make some smart moves here.
+    debug()
 
     df = df[:top]
 
@@ -296,16 +379,20 @@ def weighted_parameter_distributions(log_name):
     axes[0].set_ylabel('Weighted frequency')
 
     f.tight_layout()
-    f.savefig(os.path.join('figures', 'estimated_rate_distribution' + '.pdf'))
+    f.savefig(os.path.join('figures', 'rate_distribution_' + log_name + '.pdf'))
 
     # Print weighted mean and std of Nac and abort
     nac_wmean, nac_wstd = weighted_avg_and_std(df['Nac'], weight)
     abort_wmean, abort_wstd = weighted_avg_and_std(df['Abort'], weight)
     escape_wmean, escape_wstd = weighted_avg_and_std(df['Escape'], weight)
+    print(log_name)
+    print('abort', abort_wmean, abort_wstd)
+    print('nac', nac_wmean, nac_wstd)
+    print('escape', escape_wmean, escape_wstd)
 
-    print(abort_wmean, abort_wstd)
-    print(nac_wmean, nac_wstd)
-    print(escape_wmean, escape_wstd)
+    # Print top 5 fits
+    print("Top 5 fits")
+    print df['Fit'][:5]
 
 
 def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
@@ -333,13 +420,16 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
 
         model = ITModel(sim_setup)
 
+        # Is it true that results don't get back in the order I call them?
         if multiproc:
             #r = apply_async(pool, Run, args)
-            r = pool.apply_async(model.run)
+            args = {'include_elongation': True}
+            r = pool.apply_async(model.run, args)
             results.append(r)
         else:
-            model_ts = model.run()
-            model_scrunches = calc_scrunch_distribution(model_ts, initial_RNAP)
+            model_ts = model.run(include_elongation=True)
+            model_scrunches = calc_scrunch_distribution(model_ts,
+                                                        initial_RNAP)
             val, val_extrap = plot_and_log_scrunch_comparison(plot, log_handle,
                                                               model_scrunches,
                                                               initial_RNAP, nac,
@@ -506,10 +596,8 @@ def calc_scrunch_distribution(df, initial_RNAP):
     fig in supplementry of Revyakin).
     """
 
-    # Starts with timestep 1!
-    # BUT! Your index is now in time; you wish to work on row numbers. Turn
-    # into numpy arrays to avoid index isues.
-    escapes = np.asarray(df['FL'])[1:] - np.asarray(df['FL'])[:-1]
+    # when elongating gets +1 you have a promoter escape
+    escapes = np.asarray(df['elongating complex'])[1:] - np.asarray(df['elongating complex'])[:-1]
 
     # Skip first timestep
     time = df.index[1:]
@@ -604,7 +692,7 @@ def plot_scrunch_distributions(model_scrunches, expt, expt_extrapolated,
         plt.close(f)
 
 
-def get_kinetics(variant, GreB=False, nac=10.3, unscrunch=2.0, escape=7.9,
+def get_kinetics(variant, GreB=False, nac=10.3, unscrunch=2.0, escape=8.5,
                  escape_RNA_length=False, sim_end=300, initial_RNAP=100,
                  return_hash=False):
     """
@@ -644,9 +732,7 @@ def main():
     a class model_instance = IT(Rates, Blehs, Blahs).
     """
 
-    #revyakin_datafit()
-
-    #simple_vo_2003_comprison()
+    revyakin_datafit()
 
     # XXX not good :(
     #revyakin_datafit_new()
@@ -654,24 +740,52 @@ def main():
     # XXX try again with more simple method?
     #productive_AP_estimate()
 
-    #results = 'simple_log.log'
-
-    #df = pd.read_csv(results, sep='\t', header=0)
-
-    #df.sort('Fit', inplace=True)
-
-    #df = df[:50]
-
-    # Can we get the mean Nac and Mean Abort and Escape and std values
-    # weighted by the fit?
-
-    #debug()
-
     # Plot normalized plots of the 2003 data
     #plot_2003_kinetics()
 
     #debug()
 
+    #multiproc_test()
+
+
+def justaminute(i):
+    import time
+    from numpy.random import uniform
+    randval = uniform()  # random number between 0 and 1
+    print randval
+    time.sleep(randval)
+    return i
+
+
+def multiproc_test():
+    """
+    Can you trust that the simulations you throw out with apply_async or amap
+    return in the order you think? :S
+
+    The answer seems to be yes. I think it is because I'm keeping the results
+    in a list for apply_async. That list ensures proper order of input and
+    output to multipricessing. Also, by using join, we wait until all
+    processes have finished.
+    """
+
+    i_vals = range(1,10)
+
+    # First test apply async
+    P1 = Pool(processes=1)
+    results = []
+    for i in i_vals:
+        r = P1.apply_async(justaminute, (i,))
+        results.append(r)
+    P1.close()
+    P1.join()
+    print([r.get() for r in results])
+
+    # Then test amap
+    P2 = Pool(processes=2)
+    results = P2.map_async(justaminute, i_vals)
+    P2.close()
+    P2.join()
+    print([r for r in results.get()])
 
 
 def plot_2003_kinetics():
@@ -956,7 +1070,7 @@ def get_starting_APs(its_variant, adjust_2003_FL=False):
         APs = calc_abortive_probability(rna_frac_adj)
 
     else:
-        APs = its.abortive_probability
+        APs = its.abortive_prob
 
     return APs
 

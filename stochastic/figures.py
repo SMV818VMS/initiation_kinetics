@@ -6,6 +6,7 @@ import pandas as pd
 import shelve
 sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/')
 sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/model')
+from ITSframework import calc_abortive_probability
 import data_handler
 import stochastic_model_run as smr
 import matplotlib.pyplot as plt
@@ -129,6 +130,11 @@ def initial_transcription_stats():
     ITSs = data_handler.ReadData('dg100-new')
     ITSs = sorted(ITSs, key=attrgetter('PY'))
 
+    # Setup
+    initial_RNAP = 200
+    end = 60. * 15  # just keep it big; it doesn't matter. Quick ones will
+    #finish in their own time.
+
     use_sim_db = True
     #use_sim_db = False
     #plot_species = [....]
@@ -143,13 +149,17 @@ def initial_transcription_stats():
     all_rnas = {}
     all_FL_timeseries = {}
 
+    # XXX simulations take a lot longer than they used to. Where's the time
+    # spen?
     for its in ITSs:
         ## Filter out some specific ones
         if screen and its.name not in subset:
             continue
 
-        model = smr.get_kinetics(variant=its.name)
+        model = smr.get_kinetics(variant=its.name, initial_RNAP=initial_RNAP,
+                                 sim_end=end)
         sim_id = model.calc_setup_hash()
+        print sim_id
 
         shelve_database = shelve.open(simulation_storage)
         if use_sim_db and sim_id in shelve_database:
@@ -163,31 +173,18 @@ def initial_transcription_stats():
             #plot_timeseries(its.name, ts, species)
 
         nr_rna = ts.iloc[-1].values
-        FL_timeseries = ts['FL'].values
 
         all_rnas[its.name] = nr_rna
-        all_FL_timeseries[its.name] = FL_timeseries
+        all_FL_timeseries[its.name] = ts['FL']
 
-        # XXX Make the basic bar plots
-        # XXX This is pretty useless now: the results are identical to the RNA
-        # fractions (thankfully!).
+    # XXX Make the basic bar plots
+    # These plots now serve only to show complete compliance between model
+    # and experiment
+    #for its, nr_rna in all_rnas.items():
         #write_bar_plot(nr_rna, its)
 
-    #XXX BOX, BAR, AND PY-distribution PLOTs XXX
-    # Divide itss into high and low and analyse
-    #dsetmean = np.mean([i.PY for i in ITSs])
-    for partition in ['low PY', 'high PY', 'all']:
-
-        #if partition == 'low PY':
-            #low_ITSs = [i for i in ITSs if i.PY < dsetmean]
-            #write_box_plot(low_ITSs, all_rnas, title=partition)
-
-        #if partition == 'high PY':
-            #high_ITSs = [i for i in ITSs if i.PY >= dsetmean]
-            #write_box_plot(high_ITSs, all_rnas, title=partition)
-
-        if partition == 'all':
-            write_box_plot(ITSs, all_rnas, title=partition)
+    # XXX deprecated: serve only to show indentity between model and experiment
+    #deprecated_comparison_plots(all_rnas, ITSs)
 
     #XXX NEW AP XXX
     # Calculate AP anew!
@@ -197,7 +194,24 @@ def initial_transcription_stats():
     # dimensional abortive space.
 
     #XXX t_1/2 distributions for DG100 XXX
-    #half_lives(all_FL_timeseries, sim_setup.init_RNAP)
+    #half_lives(all_FL_timeseries, initial_RNAP)
+
+
+def deprecated_comparison_plots(all_rnas, ITSs):
+
+    dsetmean = np.mean([i.PY for i in ITSs])
+    for partition in ['low PY', 'high PY', 'all']:
+
+        if partition == 'low PY':
+            low_ITSs = [i for i in ITSs if i.PY < dsetmean]
+            write_box_plot(low_ITSs, all_rnas, title=partition)
+
+        if partition == 'high PY':
+            high_ITSs = [i for i in ITSs if i.PY >= dsetmean]
+            write_box_plot(high_ITSs, all_rnas, title=partition)
+
+        if partition == 'all':
+            write_box_plot(ITSs, all_rnas, title=partition)
 
 
 def calc_AP_anew(transcripts):
@@ -254,8 +268,8 @@ def AP_recalculated(ITSs, all_rnas):
         data = {}
         index = []
 
-        new_AP = calc_AP_anew(transcripts)
-        old_AP = its_dict[its_name].abortive_probability
+        new_AP = calc_abortive_probability(transcripts)
+        old_AP = its_dict[its_name].abortive_prob
 
         data['AP experiment'] = np.asarray(old_AP) * 100.
         data['AP model'] = np.asarray(new_AP) * 100.
@@ -340,9 +354,7 @@ def half_lives(all_FL_timeseries, nr_RNAP):
 
     Terminology: your values are actually increasing. What is the value for
     50% of an increasing quantity? When Q(t) = Q(inf)/2.
-
-    Lilian talks about escape half life. I'm not sure how to interpret it. Ask
-    her!
+    Yeah that seems to be what Lilian is using also.
     """
     data = {}
     # Hey, timeseries information is not stored in tses. What to do? Start
@@ -352,9 +364,9 @@ def half_lives(all_FL_timeseries, nr_RNAP):
 
     for its_name, timeseries in all_FL_timeseries.items():
 
-        hl_index = timeseries.FL[timeseries.FL==nr_RNAP/2.].index.tolist()
+        hl_index = timeseries[timeseries==nr_RNAP/2].index.tolist()
         # For the cases where you don't simulate long enough to reach a half
-        # life
+        # life (or you are not using an even number of RNAP ... :S)
         if hl_index == []:
             half_life = np.nan
         else:
@@ -411,7 +423,7 @@ def write_box_plot(ITSs, tses, title=False):
         frac_diff = calc_frac_diff(np.array(pct_values_model), np.array(pct_values_experiment))
         data_frac[its.name] = frac_diff
 
-    #box_plot_model_exp(data, data_range, title)
+    box_plot_model_exp(data, data_range, title)
 
     # XXX NICE!! You see the trend :) It is also more pronounced for low-PY
     # positions. You can choose one (N25?) to show this trend for a single
@@ -420,7 +432,7 @@ def write_box_plot(ITSs, tses, title=False):
     # And it is more pronounced for hi
     # XXX TODO: try to ignore the data point with MSAT. I think it's heavily
     # biasing your results, especially for low-py.
-    #box_plot_model_exp_frac(data_frac, data_range, title)
+    box_plot_model_exp_frac(data_frac, data_range, title)
 
     # XXX THE optimal coolest question is: can you make a model that includes
     # some of the known suspects (long pauses, longer backtrack time)? That
@@ -432,7 +444,7 @@ def write_box_plot(ITSs, tses, title=False):
 
     # XXX Make a correlation plot between PY and fold difference between [0-6]
     # and [7-20], and between PY and fold difference betweern PY and FL
-    fold_diff_PY_correlations(ITSs, data_frac)
+    #fold_diff_PY_correlations(ITSs, data_frac)
 
     # There are so many things you could check! You have to rein yourself in a
     # bit. God bless Pandas for speeding up my plot-work 100-fold!
@@ -594,14 +606,13 @@ def calc_frac_diff(arr1, arr2):
         val1 = arr1[i]
         val2 = arr2[i]
 
-        if val1 > val2:
-            diff = float(val1)/val2
-        else:
-            diff = -float(val2)/val1
-
-        # Override the above if one of the values is zero
         if val1 == 0. or val2 == 0:
             diff = np.nan
+        else:
+            if val1 > val2:
+                diff = float(val1)/val2
+            else:
+                diff = -float(val2)/val1
 
         frac_diff.append(diff)
 
@@ -610,7 +621,7 @@ def calc_frac_diff(arr1, arr2):
 
 def pct_experiment(its):
 
-    return its.fraction * 100
+    return its.fraction * 100.
 
 
 def calc_pct_model(ts, data_range):
@@ -618,7 +629,7 @@ def calc_pct_model(ts, data_range):
     Ts must be an array with abortives from 2 to 20 and the FL
     """
 
-    return 100 * ts / ts.sum()
+    return 100. * ts / ts.sum()
 
 
 def write_bar_plot(nr_rna, its):
@@ -820,10 +831,16 @@ def simple_vo_2003_comprison():
     m1 = get_2003_FL_kinetics(method=1)
 
     # FL kinetics for model with GreB+/-
-    greb_plus = smr.get_kinetics(variant='N25', GreB=True, escape_RNA_length=14)['FL']
-    gp = greb_plus / greb_plus.max()
+    #greb_plus_model = smr.get_kinetics(variant='N25', GreB=True,
+                                       #escape_RNA_length=14,
+                                       #initial_RNAP=1000, sim_end=60*5.)
+    #greb_plus = greb_plus_model.run()['FL']
+    #gp = greb_plus / greb_plus.max()
 
-    greb_minus = smr.get_kinetics(variant='N25', GreB=False, escape_RNA_length=14)['FL']
+    greb_minus_model = smr.get_kinetics(variant='N25', GreB=False,
+                                  escape_RNA_length=14, initial_RNAP=1000,
+                                  sim_end=60.5)
+    greb_minus = greb_minus_model.run()['FL']
     gm = greb_minus / greb_minus.max()
 
     # Plot 2003 data
@@ -846,17 +863,21 @@ def simple_vo_2003_comprison():
     idx_gm = gm.tolist().index(0.5)
     thalf_grebminus = gm.index[idx_gm]
 
+    # XXX looks better without for now
     # Plot and get halflives of GreB+
-    gp.plot(ax=ax, color='k')
+    #gp.plot(ax=ax, color='k')
     #f_gp = interpolate(gp.values, gp.index, k=2)
     #thalf_grebplus = f_gp(0.5)
-    idx_gp = gp.tolist().index(0.5)
-    thalf_grebplus = gp.index[idx_gp]
+    #idx_gp = gp.tolist().index(0.5)
+    #thalf_grebplus = gp.index[idx_gp]
+    #labels = ['Vo et. al GreB- measurements',
+              #r'Vo et. al GreB- fit $t_{{1/2}}={0:.2f}$'.format(thalf_vo),
+              #r'Simulation GreB- $t_{{1/2}}={0:.2f}$'.format(thalf_grebminus),
+              #r'Simulation GreB+ $t_{{1/2}}={0:.2f}$'.format(thalf_grebplus)]
 
-    labels = ['Vo et. al GreB- measurements',
-              r'Vo et. al GreB- fit $t_{{1/2}}={0:.2f}$'.format(thalf_vo),
-              r'Simulation GreB- $t_{{1/2}}={0:.2f}$'.format(thalf_grebminus),
-              r'Simulation GreB+ $t_{{1/2}}={0:.2f}$'.format(thalf_grebplus)]
+    labels = ['Vo et. al measurements',
+              r'Vo et. al fit $t_{{1/2}}={0:.2f}$'.format(thalf_vo),
+              r'Simulation $t_{{1/2}}={0:.2f}$'.format(thalf_grebminus)]
 
     ax.legend(labels, loc='lower right', fontsize=15)
 
@@ -871,7 +892,7 @@ def simple_vo_2003_comprison():
 def main():
 
     # Distributions of % of IQ units and #RNA
-    initial_transcription_stats()
+    #initial_transcription_stats()
 
     # Remember, you are overestimating PY even if there is no recycling. Would
     # recycling lead to higher or lower PY? I'm guessing lower.
