@@ -6,10 +6,18 @@ import pandas as pd
 import shelve
 sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/')
 sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kinetic/model')
+sys.path.append(os.path.join(os.path.dirname(__file__), "parameter_estimation"))
 from ITSframework import calc_abortive_probability
+from kinetic_transcription_models import ITStoichiometricSetup
+from KineticRateConstants import ITRates
+from initial_transcription_model import ITModel, ITSimulationSetup
+#from ITSframework import calc_abortive_probability
+from metrics import weighted_avg_and_std
 import data_handler
 import stochastic_model_run as smr
 import matplotlib.pyplot as plt
+from multiprocessing import Pool
+from collections import OrderedDict
 
 plt.ioff()
 
@@ -21,12 +29,15 @@ from scipy.optimize import curve_fit
 
 # Global place for where you store your figures
 here = os.path.abspath(os.path.dirname(__file__))  # where this script is located
-fig_dir1 = os.path.join(here, 'figures')
+fig_dir = os.path.join(here, 'figures')
+
+log_dir = 'Log'
+scrunch_db = os.path.join(log_dir, 'scrunch_fit_df_storage')
 
 # Global database for storing simulation results -- don't re-calculate when
 # you are using the excact same input. Just make sure there is no implicit
 # input changes that are not being serialized for the md5 sum
-simulation_storage = os.path.join(here, 'storage', 'shelve_storage')
+simulation_storage = os.path.join(here, 'storage', 'shelve_storage_sim')
 
 
 def CalculateTranscripts(model):
@@ -131,8 +142,8 @@ def initial_transcription_stats():
     ITSs = sorted(ITSs, key=attrgetter('PY'))
 
     # Setup
-    initial_RNAP = 200
-    end = 60. * 15  # just keep it big; it doesn't matter. Quick ones will
+    initial_RNAP = 500
+    end = 60. * 30  # just keep it big; it doesn't matter. Quick ones will
     #finish in their own time.
 
     use_sim_db = True
@@ -145,12 +156,10 @@ def initial_transcription_stats():
     subset = ['N25']
     #subset = ['N25-A1anti']
 
-    # Keep all rnas to make a box plot after.
-    all_rnas = {}
-    all_FL_timeseries = {}
+    p = Pool()
+    results = []
+    sim_ids = []
 
-    # XXX simulations take a lot longer than they used to. Where's the time
-    # spen?
     for its in ITSs:
         ## Filter out some specific ones
         if screen and its.name not in subset:
@@ -159,23 +168,38 @@ def initial_transcription_stats():
         model = smr.get_kinetics(variant=its.name, initial_RNAP=initial_RNAP,
                                  sim_end=end)
         sim_id = model.calc_setup_hash()
-        print sim_id
+        sim_ids.append(sim_id)
 
         shelve_database = shelve.open(simulation_storage)
         if use_sim_db and sim_id in shelve_database:
             ts = shelve_database[sim_id]
         else:
-            ts = model.run()
-            shelve_database[sim_id] = ts
+            results.append(p.apply_async(model.run))
         shelve_database.close()
 
         #if do_plot_timeseries:
             #plot_timeseries(its.name, ts, species)
+    p.join()
+    p.close()
 
-        nr_rna = ts.iloc[-1].values
+    timeseries = []
+    shelve_database = shelve.open(simulation_storage)
+    for sim_id, r in zip(sim_ids, results):
+        if sim_id in shelve_database:
+            ts = shelve_database[sim_id]
+        else:
+            ts = r.get()
+            shelve_database[sim_id] = ts
+        timeseries.append(ts)
+    shelve_database.close()
 
-        all_rnas[its.name] = nr_rna
-        all_FL_timeseries[its.name] = ts['FL']
+    # Keep all rnas to make a box plot after.
+    all_rnas = {}
+    all_FL_timeseries = {}
+    for its_name, ts in zip([i.name for i in ITSs], timeseries):
+
+        all_rnas[its_name] = ts.iloc[-1].values
+        all_FL_timeseries[its_name] = ts['FL']
 
     # XXX Make the basic bar plots
     # These plots now serve only to show complete compliance between model
@@ -194,7 +218,10 @@ def initial_transcription_stats():
     # dimensional abortive space.
 
     #XXX t_1/2 distributions for DG100 XXX
-    #half_lives(all_FL_timeseries, initial_RNAP)
+    half_lives(all_FL_timeseries, initial_RNAP)
+
+    # XXX show kinetics for some representative promoter variants? N25, anti,
+    # and some others?
 
 
 def deprecated_comparison_plots(all_rnas, ITSs):
@@ -290,7 +317,7 @@ def AP_recalculated(ITSs, all_rnas):
         ax.set_ylim(0, 80)
 
         file_name = its_name + '_AP_experiment_vs_model.pdf'
-        file_path = os.path.join(fig_dir1, file_name)
+        file_path = os.path.join(fig_dir, file_name)
         fig.suptitle(title)
         fig.savefig(file_path, format='pdf')
         plt.close(fig)
@@ -322,7 +349,7 @@ def plot_timeseries(name, ts, species):
 
     #file_name = 'Timeseries_{0}.pdf'.format(name)
 
-    #file_path = os.path.join(fig_dir1, file_name)
+    #file_path = os.path.join(fig_dir, file_name)
 
     #f.suptitle('Stochastic simulation of initial transcription for {0}'.format(name))
     #f.tight_layout()
@@ -385,7 +412,7 @@ def half_lives(all_FL_timeseries, nr_RNAP):
 
     file_name = 'Time_to_reach_fifty_percent_of_FL.pdf'
 
-    file_path = os.path.join(fig_dir1, file_name)
+    file_path = os.path.join(fig_dir, file_name)
 
     f.suptitle('Time to reach 50% of FL product')
     f.tight_layout()
@@ -494,7 +521,7 @@ def fold_diff_PY_correlations(ITSs, data_frac):
 
     file_name = 'Fold_difference_PY_correlation.pdf'
 
-    file_path = os.path.join(fig_dir1, file_name)
+    file_path = os.path.join(fig_dir, file_name)
     f.savefig(file_path, format='pdf')
 
     # Explicitly close figure to save memory
@@ -514,7 +541,7 @@ def fold_diff_PY_correlations(ITSs, data_frac):
 
     file_name = 'FL_fold_difference_PY_correlation.pdf'
 
-    file_path = os.path.join(fig_dir1, file_name)
+    file_path = os.path.join(fig_dir, file_name)
     f.savefig(file_path, format='pdf')
 
     plt.close(f)
@@ -553,7 +580,7 @@ def box_plot_model_exp_frac(data, data_range, title):
     f.suptitle('Fold difference between model and experiment at each position for DG100')
     file_name = 'Model_and_experiment_fractions_{0}.pdf'.format(title)
 
-    file_path = os.path.join(fig_dir1, file_name)
+    file_path = os.path.join(fig_dir, file_name)
     f.savefig(file_path, format='pdf')
 
     plt.close(f)
@@ -581,7 +608,7 @@ def box_plot_model_exp(data, data_range, title):
     else:
         file_name = 'Model_and_experiment.pdf'
 
-    file_path = os.path.join(fig_dir1, file_name)
+    file_path = os.path.join(fig_dir, file_name)
     f.savefig(file_path, format='pdf')
     plt.close(f)
 
@@ -673,7 +700,7 @@ def write_bar_plot(nr_rna, its):
     ax.set_ylim(0, 50)
 
     file_name = its.name + '_abortive_RNA_FL_model_comparison.pdf'
-    file_path = os.path.join(fig_dir1, file_name)
+    file_path = os.path.join(fig_dir, file_name)
     fig.suptitle('Percentage of IQ units and modelled #RNA')
     fig.savefig(file_path, format='pdf')
     plt.close(fig)
@@ -733,7 +760,7 @@ def AP_and_pct_values_distributions_DG100():
         ax.set_ylim(0, 60)
 
         file_name = 'AP_comparison_high_low_PY_{0}.pdf'.format(ab_meth)
-        file_path = os.path.join(fig_dir1, file_name)
+        file_path = os.path.join(fig_dir, file_name)
         f.suptitle('Abortive probability in high and low PY variants\n{0}'.format(ab_meth))
         f.savefig(file_path, format='pdf')
         plt.close(f)
@@ -763,7 +790,7 @@ def AP_and_pct_values_distributions_DG100():
     ax.set_ylim(0, 50)
 
     file_name = 'Percentage_comparison_high_low_PY.pdf'
-    file_path = os.path.join(fig_dir1, file_name)
+    file_path = os.path.join(fig_dir, file_name)
     f.suptitle('Percentage of radioactive intensity for high and low PY variants')
     f.savefig(file_path, format='pdf')
     plt.close(f)
@@ -820,7 +847,7 @@ def fit_FL(x, y):
     return xx, yy
 
 
-def simple_vo_2003_comprison():
+def simple_vo_2003_comparison():
     """
     Purpose is to plot the performance on N25 GreB- and compare with Vo 2003
     data from both quantitations. Show quantitations as dots but also
@@ -837,14 +864,21 @@ def simple_vo_2003_comprison():
     #greb_plus = greb_plus_model.run()['FL']
     #gp = greb_plus / greb_plus.max()
 
+    f1, ax = plt.subplots()
+    # Get and plot model data
     greb_minus_model = smr.get_kinetics(variant='N25', GreB=False,
                                   escape_RNA_length=14, initial_RNAP=1000,
                                   sim_end=60.5)
     greb_minus = greb_minus_model.run()['FL']
     gm = greb_minus / greb_minus.max()
+    gm.plot(ax=ax, color='c')
+
+    # Get half-life of FL from model
+    #thalf_grebminus = f_gm(0.5)
+    idx_gm = gm.tolist().index(0.5)
+    thalf_grebminus = gm.index[idx_gm]
 
     # Plot 2003 data
-    f1, ax = plt.subplots()
     m1.plot(ax=ax, style='.', color='g')
 
     # Fit 2003 data and calculate half life
@@ -855,13 +889,6 @@ def simple_vo_2003_comprison():
     # Get the halflife of full length product
     f_vo = interpolate(ynew, xnew, k=1)
     thalf_vo = float(f_vo(0.5))
-
-    # Plot and get halflives of GreB-
-    gm.plot(ax=ax, color='c')
-    #f_gm = interpolate(gm.values, gm.index, k=2)
-    #thalf_grebminus = f_gm(0.5)
-    idx_gm = gm.tolist().index(0.5)
-    thalf_grebminus = gm.index[idx_gm]
 
     # XXX looks better without for now
     # Plot and get halflives of GreB+
@@ -889,6 +916,654 @@ def simple_vo_2003_comprison():
     f1.savefig('GreB_plus_and_GreB_minus_kinetics.pdf')
 
 
+def revyakin_fit_plot():
+    """
+    Plot data from fit to Revyakin data
+    """
+
+    # A bit lame: database with one entry
+    # But it allows you to tweak the plot long after running the simulation
+    shelve_database = shelve.open(simulation_storage)
+    params_per_cycle = shelve_database['params']
+    shelve_database.close()
+
+    NAC_mean = [value['NAC'][0] for value in params_per_cycle.values()]
+    NAC_std = [value['NAC'][1] for value in params_per_cycle.values()]
+
+    escape_mean = [value['Escape'][0] for value in params_per_cycle.values()]
+    escape_std = [value['Escape'][1] for value in params_per_cycle.values()]
+
+    unscrunch_mean = [value['Unscrunch'][0] for value in params_per_cycle.values()]
+    unscrunch_std = [value['Unscrunch'][1] for value in params_per_cycle.values()]
+
+    df_mean = pd.DataFrame(data={'NAC': NAC_mean,
+                                 'Escape': escape_mean,
+                                 'Unscrunch': unscrunch_mean},
+                           index=range(1, len(NAC_mean)+1))
+
+    dict_err={'NAC': NAC_std, 'Escape': escape_std, 'Unscrunch': unscrunch_std}
+    df_mean = df_mean[dict_err.keys()]  # get df in same order as dict
+
+    f, axes = plt.subplots(3)
+    df_mean.plot(subplots=True, ax=axes, yerr=dict_err,
+                 sharex=True,
+                 xlim=(0.5, len(NAC_mean)+0.5),
+                 xticks=range(1, len(NAC_mean)+1),
+                 ylim=(0,26),
+                 legend=False,
+                 rot=0)
+
+    axes[-1].set_xlabel('Parameter estimation cycle')
+
+    for ax, rc in zip(axes, df_mean.columns):
+        ax.set_ylabel('{0} (1/s)'.format(rc))
+
+    add_letters(axes, ['A', 'B', 'C'], ['UL']*3)
+
+    f.savefig(os.path.join(fig_dir, 'parameter_estimation_cycles.pdf'))
+
+    # Print to screen
+    print("Mean")
+    print(df_mean)
+    print('Std')
+    print(pd.DataFrame(data=dict_err, index=df_mean.index))
+
+
+def revyakin_fit_calc():
+    """
+    Interesting. Even if you run with just 50 samples, you still get
+    convergence to small values. So to make it fair you'd need to iterate 100,
+    500, 1000 samples to also see a convergence in the convergence of values.
+
+    The method is very sensitive to the initial number of simulations. It's
+    important to start with a very high number. Subsequent steps mostly reduce
+    uncertainty.
+    """
+    # Setup
+    variant_name = 'N25'
+    ITSs = data_handler.ReadData('dg100-new')
+    its_variant = [i for i in ITSs if i.name == variant_name][0]
+    initial_RNAP = 100
+    sim_end = 1000
+    escape_RNA_length = 14
+    #GreB = False
+    GreB = True
+
+    samples_per_cycle = 100
+    cycles = 4
+    boundaries = False
+
+    #calculate = True
+    calculate = False
+
+    plot = False
+    #plot = True
+
+    multiproc = True
+    #multiproc = False
+
+    # When unpacking you can rely on getting cycle-order
+    params_per_cycle = OrderedDict()
+    shelve_database = shelve.open(simulation_storage)
+    for cycle in range(cycles):
+        if not calculate:
+            continue
+
+        log_name = '{0}-RNAP_{1}-samples_{2}-GreB_scrunch_cycle_{3}'.format(initial_RNAP,
+                                                                 samples_per_cycle,
+                                                                 GreB, cycle)
+
+        params = get_parameters(samples=samples_per_cycle, GreB=GreB,
+                                boundaries=boundaries)
+        stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
+
+        search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
+                               initial_RNAP, sim_end, params, plot, log_name)
+
+        boundaries, stats = get_weighted_parameter_distributions(log_name,
+                                                          return_stats=True)
+
+        params_per_cycle[cycle] = stats
+
+    shelve_database['params'] = params_per_cycle
+    shelve_database.close()
+
+
+def plot_iterative_improvement(params_per_cycle):
+    """
+    {0: {'Abort':  (10.7, 5.1),
+         'Escape': (13.9, 7.0),
+         'NAC':    (13.0, 7.2)},
+     1: {'Abort':  (11.0, 2.7),
+         'Escape': (14.6, 3.3),
+         'NAC':    (11.4, 3.1)}}
+    """
+
+
+def add_letters(axes, letters, positions, shiftX=0, shiftY=0):
+    """
+    letters = ('A', 'B') will add A and B to the subplots at positions ('UL
+    for example')
+    """
+
+    xy = {'x': {'UL': 0.03, 'UR': 0.85},
+          'y': {'UL': 0.97, 'UR': 0.97}}
+
+    for pos, label, ax in zip(positions, letters, axes):
+        ax.text(xy['x'][pos] + shiftX,
+                xy['y'][pos] + shiftY,
+                label, transform=ax.transAxes, fontsize=12,
+                fontweight='bold', va='top')
+
+
+def get_weighted_parameter_distributions(log_name):
+
+    # Use the top 20 results to decide on new parameter values
+    #top = 20
+    top = 15
+
+    fitness_log_file = os.path.join(log_dir, log_name + '.log')
+    df = pd.read_csv(fitness_log_file, sep='\t', header=0)
+
+    df.sort('Fit', inplace=True)
+    # write back the sorted df
+    df.to_csv(fitness_log_file, sep='\t')
+
+    df = df[:top]
+    # But drop any rows with NaN values in the Fit column
+    df = df.dropna(subset=['Fit'])
+
+    nac = df['Nac']
+    ab = df['Abort']
+    es = df['Escape']
+
+    weight = 1. / (df['Fit'] / df['Fit'].min())
+
+    #step = 0.01
+
+    f, axes = plt.subplots(3)
+    #dff = pd.DataFrame(data=np.asarray(nac), index=np.asarray(weight))
+    data = {'nac': np.asarray(nac), 'abortive': np.asarray(ab), 'Escape': np.asarray(es)}
+    dff = pd.DataFrame(data=data, index=np.asarray(weight))
+    dff = dff.sort_index()
+    new_index = np.linspace(dff.index.min(), dff.index.max(), 200)
+    dff = dff.reindex(new_index, method='nearest')
+    dff.plot(kind='hist', ax=axes, use_index=True, bins=10, legend=False,
+             normed=True, subplots=True)
+
+    axes[1].set_xlabel('Unschrunching (1/s)')
+    axes[1].set_ylabel('Weighted frequency')
+    axes[2].set_xlabel('Nucleotide addition cycle (1/s)')
+    axes[2].set_ylabel('Weighted frequency')
+    axes[0].set_xlabel('Escape rate(1/s)')
+    axes[0].set_ylabel('Weighted frequency')
+
+    f.tight_layout()
+    f.savefig(os.path.join('figures', 'rate_distribution_' + log_name + '.pdf'))
+
+    # Print weighted mean and std of Nac and abort
+    nac_wmean, nac_wstd = weighted_avg_and_std(df['Nac'], weight)
+    abort_wmean, abort_wstd = weighted_avg_and_std(df['Abort'], weight)
+    escape_wmean, escape_wstd = weighted_avg_and_std(df['Escape'], weight)
+    print(log_name)
+    print('abort', abort_wmean, abort_wstd)
+    print('nac', nac_wmean, nac_wstd)
+    print('escape', escape_wmean, escape_wstd)
+
+    # Print top 5 fits
+    print("Top 5 fits")
+    print df['Fit'][:5]
+
+    # Create new boundaries for new parameter sampling
+    nac_low = nac_wmean - nac_wstd
+    nac_high = nac_wmean + nac_wstd
+
+    abort_low = abort_wmean - abort_wstd
+    abort_high = abort_wmean + abort_wstd
+
+    escape_low = escape_wmean - escape_wstd
+    escape_high = escape_wmean + escape_wstd
+
+    boundaries = {
+        'nac_low': max(nac_low, 0),
+        'nac_high': nac_high,
+
+        'abort_low': max(abort_low, 0),
+        'abort_high': abort_high,
+
+        'escape_low': max(escape_low, 0),
+        'escape_high': escape_high,
+    }
+
+    stats = {'NAC': (nac_wmean, nac_wstd),
+             'Unscrunch': (abort_wmean, abort_wstd),
+             'Escape': (escape_wmean, escape_wstd)}
+
+    return boundaries, stats
+
+
+def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
+                           initial_RNAP, sim_end, params, plot, log_name,
+                           adjust_ap_each_position):
+
+    # So you can save dataframes to disk
+    dataframes = {}
+
+    # And use another weird way of logging the parameter results
+    fitness_log_file = os.path.join(log_dir, log_name + '.log')
+    log_handle = open(fitness_log_file, 'w')
+    log_handle.write('Fit\tFit_extrap\tNac\tAbort\tEscape\n')
+
+    if multiproc:
+        pool = Pool()
+        results = []
+
+    for nac, abrt, escape in params:
+
+        R = ITRates(its_variant, nac=nac, unscrunch=abrt, escape=escape,
+                    GreB_AP=GreB, adjust_ap_each_position=adjust_ap_each_position)
+
+        sim_name = get_sim_name(stoi_setup, its_variant)
+
+        sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end)
+
+        model = ITModel(sim_setup)
+
+        # Is it true that results don't get back in the order I call them?
+        if multiproc:
+            args = {'include_elongation': True}
+            r = pool.apply_async(model.run, args)
+            results.append(r)
+        else:
+            model_ts = model.run(include_elongation=True)
+            model_scrunches = calc_scrunch_distribution(model_ts, initial_RNAP)
+            val, val_extrap = plot_and_log_scrunch_comparison(plot, log_handle,
+                                                              model_scrunches,
+                                                              initial_RNAP, nac,
+                                                              abrt, escape)
+
+            dataframes[(val, val_extrap)] = model_ts
+
+    if multiproc:
+        pool.close()
+        pool.join()
+        model_timeseries = [r.get() for r in results]
+        for ts, pars in zip(model_timeseries, params):
+            nac, abrt, escape = pars
+            ms = calc_scrunch_distribution(ts, initial_RNAP)
+            val, val_extrap = plot_and_log_scrunch_comparison(plot, log_handle,
+                                                              ms, initial_RNAP,
+                                                              nac, abrt, escape)
+            dataframes[(val, val_extrap)] = ts
+
+    log_handle.close()
+
+
+def plot_and_log_scrunch_comparison(plot, log_handle, model_scrunches, initial_RNAP,
+                                    nac, abrt, escape):
+    """
+    Convenience function for running in parallel
+    """
+    experiment, extrapolated = get_experiment_scrunch_distribution()
+    val, val_extrap = compare_scrunch_data(model_scrunches, experiment, extrapolated)
+    entry = '{0}\t{1}\t{2}\t{3}\t{4}'.format(val, val_extrap, nac, abrt, escape)
+    log_handle.write(entry + '\n')
+
+    if plot:
+        plot_scrunch_distributions(model_scrunches, experiment, extrapolated, entry)
+
+    return val, val_extrap
+
+
+def plot_scrunch_distributions(model_scrunches, expt, expt_extrapolated,
+                               title=''):
+    """
+    Now you are plotting the cumulative distribution function, but can you
+    also plot the probability density function? Start off with a histogram.
+    """
+
+    plot_expt = True
+    fig_dir = 'figures'
+
+    expt['cumul_expt'] = 1 - expt['inverse_cumul_experiment']
+    expt_extrapolated['cumul_expt_extrap'] = 1 - expt_extrapolated['extrap_inv_cumul']
+    model_scrunches['cumul_model'] = 1 - model_scrunches['inverse_cumul_model']
+
+    # For the model data, insert a 0 to indicate that there is 0 probability
+    # of 0 scrunch time ?
+    dta = {'inverse_cumul_model': 1., 'cumul_model': 0.}
+    index = [0.]
+    extraDF = pd.DataFrame(data=dta, index=index)
+
+    model_scrunches = extraDF.append(model_scrunches)
+
+    #for logy in [True, False]:
+    for logy in [False]:
+        f, ax = plt.subplots()
+
+        ax.set_xlabel('Time (seconds)', size=20)
+        ax.set_ylabel('Probability', size=20)
+
+        model_scrunches.plot(y='cumul_model', ax=ax, logy=logy, fontsize=20,
+                             label='Model')
+
+        if plot_expt:
+            # Plot experiment as scatter
+            ax.scatter(np.asarray(expt.index), expt['cumul_expt'],
+                       label='Measurements')
+            # Plot extrapolated experiment
+            ax.plot(np.asarray(expt_extrapolated.index),
+                    expt_extrapolated['cumul_expt_extrap'], label='Fit to measurements', ls='--')
+
+        f.set_size_inches(9, 9)
+
+        #f.suptitle(title)
+
+        ax.set_xlim(0, 30)
+        ax.set_ylim(-0.02, 1.02)
+
+        if logy:
+            ax.set_xlim(0, 30)
+            ax.set_xticks(range(0,21))
+            filename = 'scrunch_times_cumulative_logy_{0}.pdf'.format(title)
+        else:
+            filename = 'scrunch_times_cumulative_{0}.pdf'.format(title)
+
+        ax.legend(loc='lower right', fontsize=20)
+
+        # Indicate where experiments cannot measure
+        ax.axvspan(0, 1, ymin=0, ymax=1, facecolor='g', alpha=0.1)
+
+        f.savefig(os.path.join(fig_dir, filename))
+
+        plt.close(f)
+
+    hist_plot = False
+    if hist_plot:
+        just_data = np.asarray(model_scrunches.index)
+        df = pd.DataFrame({'Model': just_data})
+
+        # Hey that won't work, it's just a line for the cumulated probability. You
+        # need to resample the distribution to get the underlying data.
+        #if plot_expt:
+            #df['Experiment_fit'] = np.asarray(expt_extrapolated.index)
+
+        f, ax = plt.subplots()
+        df.plot(ax=ax, kind='hist', fontsize=20, label=False, bins=50)
+        f.set_size_inches(9, 9)
+        f.savefig('scrunch_times_histogram.pdf')
+        plt.close(f)
+
+
+def compare_scrunch_data(model, experiment, experiment_extrap):
+    """
+    What should you do with a nan? Indicates that the result was not within
+    the proper range.
+    """
+    # Get the values in the model closest to those in the experiment using
+    # linear interpolation
+    compare = pd.concat([model, experiment]).sort_index().\
+              interpolate(method='index').reindex(experiment.index)
+
+    diff = np.abs(compare['inverse_cumul_experiment'] - compare['inverse_cumul_model'])
+    distance = np.linalg.norm(diff)
+
+    c_extr = pd.concat([model, experiment_extrap]).sort_index().\
+              interpolate(method='index').reindex(experiment_extrap.index)
+
+    # Ignore stuff before 0.5 seconds, it's hard to go that fast,
+    # so there will always be nans in the beginning
+    c_extr = c_extr[0.5:]
+
+    diff_extr = np.abs(c_extr['extrap_inv_cumul'] - c_extr['inverse_cumul_model'])
+    distance_extr = np.linalg.norm(diff_extr)
+
+    return distance, distance_extr
+
+
+def get_experiment_scrunch_distribution():
+    """
+    Read the experimental data from file and fit the data. Then use that
+    function (together with fit data) to compare with your results.
+
+    Note: not sure why the exponential and gamma distributions don't give a
+    good fit. Perhaps you are doing something wrong. The scipy fit stuff is
+    very uniform but not very understandble.
+    """
+
+    datapath = '/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/Revyakin 2006/Scrunch times.csv'
+
+    df_measurements = pd.read_csv(datapath, index_col='time')
+    x = np.asarray(df_measurements.index)
+    y = df_measurements['inverse_cumul_experiment']
+
+    def neg_exp(x, a):
+        return np.exp(-a*x)
+
+    popt, pcov = curve_fit(neg_exp, x, y)
+
+    # Make some preductions from this simple model
+    xx = np.linspace(0, 40, 1000)
+    y_extrapolated = neg_exp(xx, popt[0])
+    df_extrapolated = pd.DataFrame(data={'extrap_inv_cumul':y_extrapolated}, index=xx)
+
+    return df_measurements, df_extrapolated
+
+
+def calc_scrunch_distribution(df, initial_RNAP):
+    """
+    Will probably not get same distribution in time as Revyakin, but we might
+    get the same shape. They use a different salt to the other experiments,
+    and the concentration of that salt matters a lot for the result (see last
+    fig in supplementry of Revyakin).
+    """
+
+    # when elongating gets +1 you have a promoter escape
+    escapes = np.asarray(df['elongating complex'])[1:] - np.asarray(df['elongating complex'])[:-1]
+
+    # Skip first timestep
+    time = df.index[1:]
+    escape_times = time[escapes == 1]
+
+    integrated_probability = np.linspace(1, 1/float(initial_RNAP), initial_RNAP)
+
+    data = {'inverse_cumul_model': integrated_probability}
+
+    scrunch_dist = pd.DataFrame(data=data, index=escape_times)
+
+    return scrunch_dist
+
+
+def get_sim_name(stoi_setup, its_name):
+
+    if stoi_setup.part_unproductive:
+        sim_name = '{0}_also_unproductive'.format(its_name)
+    elif stoi_setup.unproductive_only:
+        sim_name = '{0}_unproductive_only'.format(its_name)
+    else:
+        sim_name = '{0}_productive_only'.format(its_name)
+
+    return sim_name
+
+
+def get_parameters(samples=10, GreB=True, boundaries=False):
+    """
+    For Revyakin data you got a similar result for stepwise and uniform
+    parameter sampling
+    """
+    from numpy.random import uniform
+
+    # Initial run
+    if boundaries is False:
+        nac_low = 1
+        nac_high = 25
+
+        abort_low = 1
+        abort_high = 25
+
+        escape_low = 1
+        escape_high = 25
+    else:
+        nac_low = boundaries['nac_low']
+        nac_high = boundaries['nac_high']
+
+        abort_low = boundaries['abort_low']
+        abort_high = boundaries['abort_high']
+
+        escape_low = boundaries['escape_low']
+        escape_high = boundaries['escape_high']
+
+    params = []
+    for sample_nr in range(samples):
+        nac = uniform(nac_low, nac_high)
+        abortive = uniform(abort_low, abort_high)
+        escape = uniform(escape_low, escape_high)
+
+        params.append((nac, abortive, escape))
+
+    return params
+
+
+def ap_sensitivity_calc():
+    """
+    Interesting. Even if you run with just 50 samples, you still get
+    convergence to small values. So to make it fair you'd need to iterate 100,
+    500, 1000 samples to also see a convergence in the convergence of values.
+    """
+    # Setup
+    variant_name = 'N25'
+    ITSs = data_handler.ReadData('dg100-new')
+    its_variant = [i for i in ITSs if i.name == variant_name][0]
+    initial_RNAP = 100
+    sim_end = 1000
+    escape_RNA_length = 14
+    #GreB = False
+    GreB = True
+
+    samples_per_cycle = 40
+    cycles = 3
+    boundaries = False
+
+    calculate = True
+    #calculate = False
+
+    plot = False
+    #plot = True
+
+    multiproc = True
+    #multiproc = False
+
+    # parameter estimation (and later, the fit to Vo et. al)
+    #adjust_ap_each_position = 10  # percent to add
+    adjust_ap_each_position = False
+
+    #ap_adjusts = range(-15, 16, 2)   # later for the 'full' show
+    ap_adjusts = range(-3, 4, 2)
+
+    # The second should be plots of change in NAC and Tau with % increase and
+    # decrease in abortive probability at each abortive position.
+
+    # You need to save the optimal NAC and the tau obtained with the optimal
+    # nacs
+    names = ['NAC', 'Escape', 'Unscrunch']
+
+    # When unpacking you can rely on getting cycle-order
+    ap_adjust_effect = OrderedDict()
+    for ap_adjustment in ap_adjusts:
+        optimal_values = OrderedDict()
+        for cycle in range(cycles):
+            if not calculate:
+                continue
+
+            log_name = '{0}-RNAP_{1}-samples_{2}-GreB_scrunch_cycle_{3}'.format(initial_RNAP,
+                                                                             samples_per_cycle,
+                                                                             GreB, cycle)
+
+            params = get_parameters(samples=samples_per_cycle, GreB=GreB,
+                                    boundaries=boundaries)
+            stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
+
+            search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
+                                   initial_RNAP, sim_end, params, plot, log_name,
+                                   adjust_ap_each_position)
+
+            boundaries, stats = get_weighted_parameter_distributions(log_name)
+
+            optimal_values[cycle] = {n:stats[n][0] for n in names}
+
+        # Extract the final optimal values from the last simulation
+        final_optimal = {n:optimal_values[cycles-1][n] for n in names}
+
+        # Get half life of FL synthesis for -GreB N25
+        tau = get_tau(500, sim_end,
+                      final_optimal['NAC'],
+                      final_optimal['Unscrunch'],
+                      final_optimal['Escape'])
+
+        ap_adjust_effect[ap_adjustment] = {'NAC': final_optimal['NAC'],
+                                           'Tau': tau}
+
+    shelve_database = shelve.open(simulation_storage)
+    shelve_database['ap_adjust'] = ap_adjust_effect
+    shelve_database.close()
+
+
+def get_tau(initial_RNAP, sim_end, nac, unscrunch, escape):
+    """
+    Returns half-life of 100% FL synthesis
+    """
+
+    greb_minus_model = smr.get_kinetics(variant='N25',
+                                        escape_RNA_length=14,
+                                        initial_RNAP=initial_RNAP,
+                                        sim_end=sim_end,
+                                        nac=nac,
+                                        escape=escape,
+                                        unscrunch=unscrunch)
+
+    greb_minus = greb_minus_model.run()['FL']
+    gm = greb_minus / greb_minus.max()
+
+    # Get half-life of FL from model
+    #thalf_grebminus = f_gm(0.5)
+    idx_gm = gm.tolist().index(0.5)
+    thalf_grebminus = gm.index[idx_gm]
+
+    return thalf_grebminus
+
+
+def ap_sensitivity_plot():
+
+    shelve_db = shelve.open(simulation_storage)
+    ap_adjust_effect = shelve_db['ap_adjust']
+    shelve_db.close()
+    ap_adjust_effect[0] = {'NAC': 10.2, 'Tau': 14.2}  # XXX get from global "correct" value?
+
+    # The indices from -x to + x now including 0
+    adjusts = sorted(ap_adjust_effect.keys())
+
+    data = {}
+    data['NAC'] = [ap_adjust_effect[i]['NAC'] for i in adjusts]
+    data['Tau'] = [ap_adjust_effect[i]['Tau'] for i in adjusts]
+
+    df = pd.DataFrame(data=data, index=adjusts)
+
+    f, axes = plt.subplots(2)
+
+    df.plot(kind='bar', ax=axes, subplots=True, sharex=True, rot=0,
+            legend=False, label=False, title=None)
+
+    axes[0].set_ylabel('NAC (1/s)')
+    axes[1].set_ylabel('Tau (s)')
+    axes[1].set_xlabel('Percent increase in AP at each ITS position before promoter escape')
+
+    # Pandas bug
+    axes[0].set_title('')
+    axes[1].set_title('')
+
+    f.savefig(os.path.join(fig_dir, 'ap_adjustment.pdf'))
+
+
 def main():
 
     # Distributions of % of IQ units and #RNA
@@ -898,9 +1573,19 @@ def main():
     # recycling lead to higher or lower PY? I'm guessing lower.
     #AP_and_pct_values_distributions_DG100()
 
-    # Result
-    #simple_vo_2003_comprison()
+    # Fitting to Revyakin: +/-GreB, iteratively; save the w/mean
+    # and w/std to make a line plot that shows the convergence of the
+    # iterative scheme.
+    #revyakin_fit_calc()
+    #revyakin_fit_plot()
 
+    # Obtain the best parameters for N25 +Greb with extra percentages to AP.
+    # +/- 1 to +/- 10 for example. Plot NAC and Tau (Vo).
+    #ap_sensitivity_calc()
+    ap_sensitivity_plot()
+
+    # Fitting to ensemble studies
+    #simple_vo_2003_comparison()
 
 if __name__ == '__main__':
     main()

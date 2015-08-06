@@ -6,11 +6,10 @@ sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/kineti
 sys.path.append('/home/jorgsk/Dropbox/phdproject/transcription_initiation/data')
 sys.path.append(os.path.join(os.path.dirname(__file__), "parameter_estimation"))
 import parest
-import kinetic_transcription_models as ktm
+from kinetic_transcription_models import ITStoichiometricSetup
 from KineticRateConstants import ITRates
 from initial_transcription_model import ITModel, ITSimulationSetup
 from ITSframework import calc_abortive_probability
-from metrics import weighted_avg_and_std
 
 from ipdb import set_trace as debug  # NOQA
 import numpy as np
@@ -79,113 +78,42 @@ def bai_rates(nuc, NTP, EC):
     return nac2
 
 
-def get_parameters(method='uniform', samples=10, GreB=True):
+def get_parameters(samples=10, GreB=True, boundaries=False):
     """
     For Revyakin data you got a similar result for stepwise and uniform
     parameter sampling
     """
     from numpy.random import uniform
 
+    # Initial run
+    if boundaries is False:
+        nac_low = 1
+        nac_high = 25
+
+        abort_low = 1
+        abort_high = 25
+
+        escape_low = 1
+        escape_high = 25
+    else:
+        nac_low = boundaries['nac_low']
+        nac_high = boundaries['nac_high']
+
+        abort_low = boundaries['abort_low']
+        abort_high = boundaries['abort_high']
+
+        escape_low = boundaries['escape_low']
+        escape_high = boundaries['escape_high']
+
     params = []
-    if method == 'stepwise':
-        for nac in np.linspace(2.5, 10, 5):
-            for abortive in [nac/i for i in [2, 4, 8]]:
-                for escape in [nac, nac/2, nac/10.]:
-                    params.append((nac, abortive, escape))
+    for sample_nr in range(samples):
+        nac = uniform(nac_low, nac_high)
+        abortive = uniform(abort_low, abort_high)
+        escape = uniform(escape_low, escape_high)
 
-    elif method == 'uniform':
-
-        # XXX what, a nac of 21.5 even with GreB? Yeah, abortive adjusts
-        # itself to be fast enough, and escape goes fast too. So abortive and
-        # nac reactions find an optimum when they are very fast both. Fuck
-        # damn. You need to look at some plots.
-        #abr_min, abr_max = (1, 6)
-        #esc_min, esc_max = (0.1, 15)
-        #if GreB:
-            #nac_min, nac_max = (5, 15)
-        #else:
-            #nac_min, nac_max = (5, 25)
-
-        for sample_nr in range(samples):
-             #XXX 1st iteration
-            #abortive = uniform(1, 25)
-            #nac = uniform(5, 25)
-            #escape = uniform(0.1, 25)
-
-            # XXX 2nd iteration (using mean +/- std of 10% of the best results)
-            #abortive = uniform(0.3, 15.3)
-            #nac = uniform(5, 16)
-            #escape = uniform(5.4, 19)
-
-            # XXX 3nd iteration (as above)
-            #abortive = uniform(0.6, 5.2)
-            #nac = uniform(6.6, 12.6)
-            #escape = uniform(6.5, 15.5)
-
-            # XXX 4th iteration (as above)
-            #abortive = uniform(1.3, 2.1)
-            #nac = uniform(8.6, 11.2)
-            #escape = uniform(9.2, 14.8)
-
-             #XXX 1st iteration GreB minus
-            abortive = uniform(1, 25)
-            nac = uniform(5, 25)
-            escape = uniform(0.1, 25)
-
-            params.append((nac, abortive, escape))
+        params.append((nac, abortive, escape))
 
     return params
-
-
-def revyakin_datafit_new():
-    """
-    Use the new framework
-    """
-    #from productive_AP_setup import estimator_setup
-    from scrunch_distribution import estimator_setup
-
-    # Setup
-    variant_name = 'N25'
-    ITSs = data_handler.ReadData('dg100-new')
-    its_variant = [i for i in ITSs if i.name == variant_name][0]
-    initial_RNAP = 100
-    sim_end = 300
-    samples = 100
-    processes = 2
-    #batch_size = 15
-    batch_size = samples - 1
-    # XXX with my 8-core I could be 8 times as fast: 15 seconds instead of 2
-    # minutes wait. Yes plz.
-
-    # XXX If the whole thing was pandas-aware you could in the results part
-    # include both model (lots of data) and observation (few data)
-    # Damn you need to think about that.
-
-    # Get observation data
-    experiment, extrapolated = get_experiment_scrunch_distribution()
-
-    estim_setup = estimator_setup(its_variant, initial_RNAP, sim_end,
-                                  experiment, escape_length=12)
-
-    # why are all simulations suddenly having an end time of 90s?
-    name = 'N25_scrunch_distribution_100x100'
-    rerun = True
-    #rerun = False
-    if rerun:
-        sampler = parest.Parest(estim_setup, samples=samples, name=name,
-                                processes=processes, batch_size=batch_size)
-        sampler.search()
-        results = sampler.get_results()
-    else:
-        results = parest.load_results(name)
-
-    # Yeah, so you rewrote your "framework" (I'm tarting to dislike it) to use
-    # pandas so that you can easily include each result's timeseries in a
-    # single datafame. Guess what, they have unique but similar time-points,
-    # so that the size of the dataframe becomes enormous. Try to manage for
-    # now, but a lesson for the future would be to return a dictionary with
-    # dataframes.
-    plot_scrunch(estim_setup.observation(), results, estim_setup.parameters().keys())
 
 
 def plot_scrunch(obs, results, param_names):
@@ -221,284 +149,6 @@ def plot_scrunch(obs, results, param_names):
     debug()
 
     #plot_scrunch_distributions(model_scrunches, experiment, extrapolated, title)
-
-
-def revyakin_datafit():
-    """
-    XXX Show that using GreB - that the optimal rates do not make sense, and
-    that they make sense with GreB +
-
-    HEY! Between-sample variability is very high until 5000k. Shit, what
-    should you do about that? Even at 10K you are at the level where scores
-    differ enough to take a parameter combinatin from high to low.
-
-    Maybe this is something you could focus on in your paper? I bet this
-    effect will be very strong for the higly abortive complexes. You could do
-    some bootsrapping to get some kind of confidence interval.
-
-    With 100 simulations the picture is generally rougher. You could use it to
-    paint a picture of the variability in the process. But who is to say that
-    the stochastichness in the stochastic simulations (which are based on
-    particle collision theory ...) is correct for initial transcription?
-
-    When you run with an open parameter space (0 to 25) you get the following:
-
-    200-RNAP_200-samples_True-GreB_scrunch
-    ('abort', 8.0746941896014945, 7.2930057116007667)
-    ('nac', 10.437303410995096, 5.5298816304097986)
-    ('escape', 12.250466735166571, 6.8438807367664403)
-    Top 5 fits
-    44     0.118664
-    136    0.166963
-    110    0.196453
-    155    0.200687
-    163    0.213698
-
-    When you use the weighted mean +/- weighted std to limit the next run you get the following:
-
-    ('abort', 2.9103208528467666, 2.2715841910551893)
-    ('nac', 9.602162622646766, 3.0303177750109334)
-    ('escape', 10.931500559510905, 4.6292808482572836)
-    Top 5 fits
-    4     0.101838
-    57    0.138797
-    55    0.145980
-    64    0.159739
-    98    0.172820
-
-    When you again run with the mean +/- std for the next run you get the
-    following:
-    200-RNAP_200-samples_True-GreB_scrunch
-    ('abort', 1.6893704779076408, 0.36894418529195627)
-    ('nac', 9.8950165297118176, 1.2443237642078515)
-    ('escape', 12.013074849879132, 2.8256648254339964)
-    Top 5 fits
-    5      0.063654
-    27     0.078444
-    59     0.081511
-    3      0.088815
-    170    0.105785
-
-    And the fourth iteration:
-    ('abort', 1.5762881999535692, 0.13886299818608847)
-    ('nac', 10.043743507251243, 0.63940817558655716)
-    ('escape', 11.843573613785063, 1.7153370690102836)
-    Top 5 fits
-    73    0.070184
-    3     0.073702
-    31    0.075871
-    59    0.075952
-    75    0.076597
-
-    The heuristic of rerunning with weighted mean and weighted std works just
-    great. You could repeat the process until there is no more than 5%
-    variation in goodness of fit for the top the 5% of samples.
-
-    And then, how does one calculate the damn confidence interval? It's not
-    easy to say. You found a thesis on the topic, located in /home/jorgsk.
-
-    For the nonce, just provide the weighted standard deviations for the last
-    round of simulations.
-    """
-
-    # Setup
-    variant_name = 'N25'
-    ITSs = data_handler.ReadData('dg100-new')
-    its_variant = [i for i in ITSs if i.name == variant_name][0]
-    initial_RNAP = 200
-    sim_end = 1000
-    samples = 200
-    escape_RNA_length=14
-    #GreB = False
-    GreB = True
-
-    params = get_parameters(method='uniform', samples=samples, GreB=GreB)
-    #params = [(9.2, 1.6, 5)]  # the golden params
-    #params = [(12, 1.3, 6)]  # new golden params?
-    stoi_setup = ktm.ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
-
-    log_name = '{0}-RNAP_{1}-samples_{2}-GreB_scrunch'.format(initial_RNAP, samples, GreB)
-
-    calculate = True
-    #calculate = False
-
-    plot = False
-    #plot = True
-
-    multiproc = True
-    #multiproc = False
-
-    if calculate:
-        search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
-                               initial_RNAP, sim_end, params, plot, log_name)
-    else:
-        get_weighted_parameter_distributions(log_name)
-
-
-def get_weighted_parameter_distributions(log_name):
-
-    top = 20
-
-    fitness_log_file = os.path.join(log_dir, log_name+'.log')
-    df = pd.read_csv(fitness_log_file, sep='\t', header=0)
-
-    df.sort('Fit', inplace=True)
-
-    # When you "release" the parameter values you see some pretty wild values.
-    # For example, nac =5 and abort = 20; or nac=19, abort=14 and escape=0.5.
-    # It's clear that these parameters depend on and affect each other. Gotta
-    # make some smart moves here.
-    debug()
-
-    df = df[:top]
-
-    nac = df['Nac']
-    ab = df['Abort']
-    es = df['Escape']
-
-    # look onl at the top 100
-    weight = 1./ (df['Fit'] / df['Fit'].min())
-
-    #step = 0.01
-
-    f, axes = plt.subplots(3)
-    #dff = pd.DataFrame(data=np.asarray(nac), index=np.asarray(weight))
-    data = {'nac': np.asarray(nac), 'abortive': np.asarray(ab), 'Escape': np.asarray(es)}
-    dff = pd.DataFrame(data=data, index=np.asarray(weight))
-    dff = dff.sort_index()
-    new_index = np.linspace(dff.index.min(),dff.index.max(),200)
-    dff = dff.reindex(new_index, method='nearest')
-    dff.plot(kind='hist', ax=axes, use_index=True, bins=10, legend=False,
-             normed=True, subplots=True)
-
-    axes[1].set_xlabel('Unschrunching (1/s)')
-    axes[1].set_ylabel('Weighted frequency')
-    axes[2].set_xlabel('Nucleotide addition cycle (1/s)')
-    axes[2].set_ylabel('Weighted frequency')
-    axes[0].set_xlabel('Escape rate(1/s)')
-    axes[0].set_ylabel('Weighted frequency')
-
-    f.tight_layout()
-    f.savefig(os.path.join('figures', 'rate_distribution_' + log_name + '.pdf'))
-
-    # Print weighted mean and std of Nac and abort
-    nac_wmean, nac_wstd = weighted_avg_and_std(df['Nac'], weight)
-    abort_wmean, abort_wstd = weighted_avg_and_std(df['Abort'], weight)
-    escape_wmean, escape_wstd = weighted_avg_and_std(df['Escape'], weight)
-    print(log_name)
-    print('abort', abort_wmean, abort_wstd)
-    print('nac', nac_wmean, nac_wstd)
-    print('escape', escape_wmean, escape_wstd)
-
-    # Print top 5 fits
-    print("Top 5 fits")
-    print df['Fit'][:5]
-
-
-def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
-                           initial_RNAP, sim_end, params, plot, log_name):
-
-    # So you can save dataframes to disk
-    dataframes = {}
-
-    # And use another weird way of logging the parameter results
-    fitness_log_file = os.path.join(log_dir, log_name+'.log')
-    log_handle = open(fitness_log_file, 'w')
-    log_handle.write('Fit\tFit_extrap\tNac\tAbort\tEscape\n')
-
-    if multiproc:
-        pool = Pool(processes=2)
-        results = []
-    for nac, abrt, escape in params:
-
-        R = ITRates(its_variant, nac=nac, unscrunch=abrt, escape=escape, GreB_AP=GreB)
-        #R = ITRates(its_variant, nac=nac, unscrunch=abrt, escape=escape, GreB_AP=False)
-
-        sim_name = get_sim_name(stoi_setup, its_variant)
-
-        sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end)
-
-        model = ITModel(sim_setup)
-
-        # Is it true that results don't get back in the order I call them?
-        if multiproc:
-            #r = apply_async(pool, Run, args)
-            args = {'include_elongation': True}
-            r = pool.apply_async(model.run, args)
-            results.append(r)
-        else:
-            model_ts = model.run(include_elongation=True)
-            model_scrunches = calc_scrunch_distribution(model_ts,
-                                                        initial_RNAP)
-            val, val_extrap = plot_and_log_scrunch_comparison(plot, log_handle,
-                                                              model_scrunches,
-                                                              initial_RNAP, nac,
-                                                              abrt, escape)
-
-            dataframes[(val, val_extrap)] = model_ts
-
-    if multiproc:
-        pool.close()
-        pool.join()
-        model_timeseries = [r.get() for r in results]
-        for ts, pars in zip(model_timeseries, params):
-            nac, abrt, escape = pars
-            ms = calc_scrunch_distribution(ts, initial_RNAP)
-            val, val_extrap = plot_and_log_scrunch_comparison(plot, log_handle,
-                                                              ms, initial_RNAP,
-                                                              nac, abrt, escape)
-            dataframes[(val, val_extrap)] = ts
-
-    log_handle.close()
-
-    #shelve_database = shelve.open(scrunch_db)
-    #shelve_database[log_name] = dataframes
-    #shelve_database.close()
-
-
-def plot_and_log_scrunch_comparison(plot, log_handle, model_scrunches, initial_RNAP,
-                                    nac, abrt, escape):
-    """
-    Convenience function for running in parallel
-    """
-    experiment, extrapolated = get_experiment_scrunch_distribution()
-    val, val_extrap = compare_scrunch_data(model_scrunches, experiment, extrapolated)
-    entry = '{0}\t{1}\t{2}\t{3}\t{4}'.format(val, val_extrap, nac, abrt, escape)
-    log_handle.write(entry + '\n')
-
-    if plot:
-        plot_scrunch_distributions(model_scrunches, experiment, extrapolated, entry)
-
-    return val, val_extrap
-
-
-def get_experiment_scrunch_distribution():
-    """
-    Read the experimental data from file and fit the data. Then use that
-    function (together with fit data) to compare with your results.
-
-    Note: not sure why the exponential and gamma distributions don't give a
-    good fit. Perhaps you are doing something wrong. The scipy fit stuff is
-    very uniform but not very understandble.
-    """
-
-    datapath = '/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/Revyakin 2006/Scrunch times.csv'
-
-    df_measurements = pd.read_csv(datapath, index_col='time')
-    x = np.asarray(df_measurements.index)
-    y = df_measurements['inverse_cumul_experiment']
-
-    def neg_exp(x, a):
-        return np.exp(-a*x)
-
-    popt, pcov = curve_fit(neg_exp, x, y)
-
-    # Make some preductions from this simple model
-    xx = np.linspace(0, 40, 1000)
-    y_extrapolated = neg_exp(xx, popt[0])
-    df_extrapolated = pd.DataFrame(data={'extrap_inv_cumul':y_extrapolated}, index=xx)
-
-    return df_measurements, df_extrapolated
 
 
 def fit_to_distributions():
@@ -562,141 +212,10 @@ def fit_to_distributions():
     plt.close(f)
 
 
-def compare_scrunch_data(model, experiment, experiment_extrap):
+def get_kinetics(variant, GreB=False, nac=10.1, unscrunch=1.8, escape=11.8,
+                 escape_RNA_length=False, sim_end=1000, initial_RNAP=100):
     """
-    What should you do with a nan? Indicates that the result was not within
-    the proper range.
-    """
-    # Get the values in the model closest to those in the experiment using
-    # linear interpolation
-    compare = pd.concat([model, experiment]).sort_index().\
-              interpolate(method='index').reindex(experiment.index)
-
-    diff = np.abs(compare['inverse_cumul_experiment'] - compare['inverse_cumul_model'])
-    distance = np.linalg.norm(diff)
-
-    c_extr = pd.concat([model, experiment_extrap]).sort_index().\
-              interpolate(method='index').reindex(experiment_extrap.index)
-
-    # Ignore stuff before 0.5 seconds, it's hard to go that fast,
-    # so there will always be nans in the beginning
-    c_extr = c_extr[0.5:]
-
-    diff_extr = np.abs(c_extr['extrap_inv_cumul'] - c_extr['inverse_cumul_model'])
-    distance_extr = np.linalg.norm(diff_extr)
-
-    return distance, distance_extr
-
-
-def calc_scrunch_distribution(df, initial_RNAP):
-    """
-    Will probably not get same distribution in time as Revyakin, but we might
-    get the same shape. They use a different salt to the other experiments,
-    and the concentration of that salt matters a lot for the result (see last
-    fig in supplementry of Revyakin).
-    """
-
-    # when elongating gets +1 you have a promoter escape
-    escapes = np.asarray(df['elongating complex'])[1:] - np.asarray(df['elongating complex'])[:-1]
-
-    # Skip first timestep
-    time = df.index[1:]
-    escape_times = time[escapes == 1]
-
-    integrated_probability = np.linspace(1, 1/float(initial_RNAP), initial_RNAP)
-
-    data = {'inverse_cumul_model': integrated_probability}
-
-    scrunch_dist = pd.DataFrame(data=data, index=escape_times)
-
-    return scrunch_dist
-
-
-def plot_scrunch_distributions(model_scrunches, expt, expt_extrapolated,
-                               title=''):
-    """
-    Now you are plotting the cumulative distribution function, but can you
-    also plot the probability density function? Start off with a histogram.
-    """
-
-    plot_expt = True
-    fig_dir = 'figures'
-
-    expt['cumul_expt'] = 1 - expt['inverse_cumul_experiment']
-    expt_extrapolated['cumul_expt_extrap'] = 1 - expt_extrapolated['extrap_inv_cumul']
-    model_scrunches['cumul_model'] = 1 - model_scrunches['inverse_cumul_model']
-
-    # For the model data, insert a 0 to indicate that there is 0 probability
-    # of 0 scrunch time ?
-    dta = {'inverse_cumul_model': 1., 'cumul_model': 0.}
-    index = [0.]
-    extraDF = pd.DataFrame(data=dta, index=index)
-
-    model_scrunches = extraDF.append(model_scrunches)
-
-    #for logy in [True, False]:
-    for logy in [False]:
-        f, ax = plt.subplots()
-
-        ax.set_xlabel('Time (seconds)', size=20)
-        ax.set_ylabel('Probability', size=20)
-
-        model_scrunches.plot(y='cumul_model', ax=ax, logy=logy, fontsize=20,
-                             label='Model')
-
-        if plot_expt:
-            # Plot experiment as scatter
-            ax.scatter(np.asarray(expt.index), expt['cumul_expt'],
-                       label='Measurements')
-            # Plot extrapolated experiment
-            ax.plot(np.asarray(expt_extrapolated.index),
-                    expt_extrapolated['cumul_expt_extrap'], label='Fit to measurements', ls='--')
-
-        f.set_size_inches(9, 9)
-
-        #f.suptitle(title)
-
-        ax.set_xlim(0, 30)
-        ax.set_ylim(-0.02, 1.02)
-
-        if logy:
-            ax.set_xlim(0, 30)
-            ax.set_xticks(range(0,21))
-            filename = 'scrunch_times_cumulative_logy_{0}.pdf'.format(title)
-        else:
-            filename = 'scrunch_times_cumulative_{0}.pdf'.format(title)
-
-        ax.legend(loc='lower right', fontsize=20)
-
-        # Indicate where experiments cannot measure
-        ax.axvspan(0, 1, ymin=0, ymax=1, facecolor='g', alpha=0.1)
-
-        f.savefig(os.path.join(fig_dir, filename))
-
-        plt.close(f)
-
-    hist_plot = False
-    if hist_plot:
-        just_data = np.asarray(model_scrunches.index)
-        df = pd.DataFrame({'Model': just_data})
-
-        # Hey that won't work, it's just a line for the cumulated probability. You
-        # need to resample the distribution to get the underlying data.
-        #if plot_expt:
-            #df['Experiment_fit'] = np.asarray(expt_extrapolated.index)
-
-        f, ax = plt.subplots()
-        df.plot(ax=ax, kind='hist', fontsize=20, label=False, bins=50)
-        f.set_size_inches(9, 9)
-        f.savefig('scrunch_times_histogram.pdf')
-        plt.close(f)
-
-
-def get_kinetics(variant, GreB=False, nac=10.3, unscrunch=2.0, escape=8.5,
-                 escape_RNA_length=False, sim_end=300, initial_RNAP=100,
-                 return_hash=False):
-    """
-    Just want kinetics. Why don't you give it?
+    Return a kinetic model ready to run.
     """
 
     ITSs = data_handler.ReadData('dg100-new')
@@ -705,7 +224,7 @@ def get_kinetics(variant, GreB=False, nac=10.3, unscrunch=2.0, escape=8.5,
     if escape_RNA_length is False:
         escape_RNA_length = its.msat_calculated
 
-    stoi_setup = ktm.ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
+    stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
 
     R = ITRates(its, nac=nac, unscrunch=unscrunch, escape=escape, GreB_AP=GreB)
 
@@ -720,24 +239,14 @@ def get_kinetics(variant, GreB=False, nac=10.3, unscrunch=2.0, escape=8.5,
 
 def main():
     """
-    ON parameter estimation. You found a good-looking package called SPOTPY
-    which has built-in several methods for parameter estimation, including
-    evolutionary approaches. But in just testing the tutorials, you run into
-    errors. However, it can be a good foundation for you to build your own
-    approach. They are consistently using root mean squared error (RMSE).
-    And they have a way of calculating the 95% confidence interval. If you
-    could do that too it would be awesome.
-
-    So. What to do first? You can refactor the model run. You can make it into
-    a class model_instance = IT(Rates, Blehs, Blahs).
     """
-
-    revyakin_datafit()
+    pass
 
     # XXX not good :(
     #revyakin_datafit_new()
 
     # XXX try again with more simple method?
+    # XXX this would be a great result if it works, but have you the time?
     #productive_AP_estimate()
 
     # Plot normalized plots of the 2003 data
