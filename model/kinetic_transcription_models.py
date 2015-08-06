@@ -27,8 +27,7 @@ class ITStoichiometricSetup(object):
         # escape RNA-length: last point of escape
         self.escape_RNA_length = escape_RNA_length
 
-        # you can provide custom AP values for the productive fraction, since
-        # these values are not known
+        # you can provide custom AP for productive fraction
         self.custom_AP = custom_AP
 
 
@@ -432,10 +431,10 @@ def GetReactions(G):
 
 def CreateModelGraph(R, name, setup, write_log=False):
     """
-    This is a model without translocation and without free RNAP.
+    Calculate rate constants and place them in a graph of the model.
     """
 
-    # Create graph
+    # Calculate rate constants and create graph
     G = BasicITStoichiometry(R, name, setup)
 
     if write_log:

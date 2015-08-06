@@ -9,7 +9,8 @@ class ITRates(object):
     """
 
     def __init__(self, its_variant, nac=1, to_fl=5, custom_AP=False,
-                 GreB_AP=False, escape=5, unscrunch=2):
+                 GreB_AP=False, escape=5, unscrunch=2,
+                 adjust_ap_each_position=False):
 
         self.name = its_variant.name
         self.nac = nac
@@ -19,6 +20,13 @@ class ITRates(object):
 
         self.custom_AP = custom_AP
         self.GreB_AP = GreB_AP
+
+        if (custom_AP is not False) and (GreB_AP is not False):
+            print("Can't have both custom AP and GreB AP!")
+            1/0
+
+        # Ajdust rate constant of backtracking
+        self.adjust_ap_each_position = adjust_ap_each_position
 
         # These have to be present
         self.abortive_prob = its_variant.abortive_prob
@@ -51,7 +59,6 @@ class ITRates(object):
             print("AP not number between 0 and 1")
 
     def Backtrack(self, rna_length, unproductive=False, use_custom_AP=False):
-
         # It's implicit that custom AP should only be used for the productive
         # fraction, since we imagine that we have the AP values for the
         # unproductive fraction
@@ -59,6 +66,13 @@ class ITRates(object):
             ap = self.custom_AP[rna_length-2]
         else:
             ap = self._GetAP(rna_length, unproductive)
+
+        # Adjust backtracking rate by some fraction
+        if self.adjust_ap_each_position is not False:
+            # If AP is already 0 don't do anything.
+            if ap > 0:
+                ap = ap + self.adjust_ap_each_position/100.
+                ap = max(ap, 0)  # in case adjustment leads to below-zero numbers
 
         # Avoid almost dividing by zero for high AP
         if ap > 0.95:
