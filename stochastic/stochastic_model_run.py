@@ -52,8 +52,8 @@ def bai_rates(nuc, NTP, EC):
     dset = data_handler.ReadData('dg100-new')
     its = [i for i in dset if i.name == 'N25'][0]
 
-    k_max = {'A': 50, 'U':18, 'G': 36, 'C': 33, 'T': 18}
-    K_d = {'A': 38, 'U':24, 'G': 62, 'C': 7, 'T': 24}
+    k_max = {'A': 50, 'U': 18, 'G': 36, 'C': 33, 'T': 18}
+    K_d = {'A': 38, 'U': 24, 'G': 62, 'C': 7, 'T': 24}
 
     # Find EC for this sequence (only DNADNA and RNADNA, no DG3D since that
     # was not used by Bai et al)
@@ -65,12 +65,12 @@ def bai_rates(nuc, NTP, EC):
     its.calc_keq(c1, c2, c3, msat_normalization=False, rna_len=rna_len)
 
     # Old Bai
-    nac2 = (24.7 * NTP) / (15.6*(1 + EC) + NTP)
+    nac2 = (24.7 * NTP) / (15.6 * (1 + EC) + NTP)
     # New Bai
     #nac1 = (k_max[nuc] * NTP) / (K_d[nuc]*(1 + EC) + NTP)
     EC = 1.6
     for nuc in list("GATC"):
-        nac1 = (k_max[nuc] * NTP) / (K_d[nuc]*(1 + EC) + NTP)
+        nac1 = (k_max[nuc] * NTP) / (K_d[nuc] * (1 + EC) + NTP)
         print nuc, nac1
 
     #print nac2/nac1
@@ -160,7 +160,7 @@ def fit_to_distributions():
     y = df_measurements['inverse_cumul_experiment']
 
     def neg_exp(x, a):
-        return np.exp(-a*x)
+        return np.exp(-a * x)
 
     popt, pcov = curve_fit(neg_exp, x, y)
 
@@ -183,17 +183,17 @@ def fit_to_distributions():
     expon_data.sort()
 
     #integrated_prob = np.linspace(1, 1/float(sample_size), sample_size)
-    integrated_prob = np.linspace(1/float(sample_size), 1, sample_size)
+    integrated_prob = np.linspace(1 / float(sample_size), 1, sample_size)
 
-    df_gamma = pd.DataFrame(data={'gamma':integrated_prob}, index=gamma_data)
-    df_expon = pd.DataFrame(data={'exponential':integrated_prob}, index=expon_data)
+    df_gamma = pd.DataFrame(data={'gamma': integrated_prob}, index=gamma_data)
+    df_expon = pd.DataFrame(data={'exponential': integrated_prob}, index=expon_data)
 
     #y_model = neg_exp(x, popt[0])
 
     # Make some preductions from this simple model
     xx = np.linspace(0, 40, 1000)
     y_extrapolated = neg_exp(xx, popt[0])
-    df_extrapolated = pd.DataFrame(data={'extrap_inv_cumul':y_extrapolated}, index=xx)
+    df_extrapolated = pd.DataFrame(data={'extrap_inv_cumul': y_extrapolated}, index=xx)
 
     f, ax = plt.subplots()
 
@@ -205,8 +205,8 @@ def fit_to_distributions():
     df_expon.plot(ax=ax, logy=True)
 
     ax.set_xlim(0, 20)
-    ax.set_ylim(1e-2,1)
-    ax.set_xticks(range(0,21))
+    ax.set_ylim(1e-2, 1)
+    ax.set_xticks(range(0, 21))
     f.savefig('scrunch_times_experiment.pdf')
 
     plt.close(f)
@@ -277,7 +277,7 @@ def multiproc_test():
     processes have finished.
     """
 
-    i_vals = range(1,10)
+    i_vals = range(1, 10)
 
     # First test apply async
     P1 = Pool(processes=1)
@@ -287,14 +287,14 @@ def multiproc_test():
         results.append(r)
     P1.close()
     P1.join()
-    print([r.get() for r in results])
+    print([res.get() for res in results])
 
     # Then test amap
     P2 = Pool(processes=2)
     results = P2.map_async(justaminute, i_vals)
     P2.close()
     P2.join()
-    print([r for r in results.get()])
+    print([res for res in results.get()])
 
 
 def plot_2003_kinetics():
@@ -308,7 +308,7 @@ def plot_2003_kinetics():
     reinitiation.
     """
 
-    data ='/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/'
+    data = '/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/'
     m1 = os.path.join(data, 'vo_2003/Fraction_FL_and_abortive_timeseries_method_1.csv')
     m2 = os.path.join(data, 'vo_2003/Fraction_FL_and_abortive_timeseries_method_2.csv')
 
@@ -322,8 +322,8 @@ def plot_2003_kinetics():
     max1 = df1.max().max()
     max2 = df2.max().max()
 
-    df1_norm = df1/max1
-    df2_norm = df2/max2
+    df1_norm = df1 / max1
+    df2_norm = df2 / max2
 
     # XXX the data is already interpolated by Eugene during export. I'm
     # guessing linear interpoltation.
@@ -336,10 +336,10 @@ def plot_2003_kinetics():
     ax.set_xlabel('time (minutes)')
     ax.set_ylabel('relative to maximum abortive signal')
 
-    ax.set_xticks(range(0,11))
-    ax.set_yticks(np.arange(0,1.1, 0.1))
+    ax.set_xticks(range(0, 11))
+    ax.set_yticks(np.arange(0, 1.1, 0.1))
 
-    ax.set_ylim(0,1.01)
+    ax.set_ylim(0, 1.01)
 
     # find correlation between the two curves
     corr1 = df1_norm.corr().min().min()
@@ -443,7 +443,7 @@ def plot_APFL_results(obs, results, varied_parameters):
     noscore = top_params[varied_parameters + ['median_ae']]
     for sim_nr in top_params_sim_nr:
         par_vals = noscore.loc[sim_nr].to_dict()
-        lab = ' '.join(['{0}: {1:.2f}'.format(k,v) for k,v in par_vals.items()])
+        lab = ' '.join(['{0}: {1:.2f}'.format(k, v) for k, v in par_vals.items()])
         labels.append(lab)
     # Restore observation
     labels.insert(0, 'Experiment')
@@ -458,7 +458,7 @@ def plot_APFL_results(obs, results, varied_parameters):
 def get_N25_kinetic_data(sim_end, method_nr=1):
 
     # Fetch kinetic data for N25 for comparison
-    data ='/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/'
+    data = '/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/'
     if method_nr == 1:
         path = os.path.join(data, 'vo_2003/Fraction_FL_and_abortive_timeseries_method_1.csv')
     elif method_nr == 2:
@@ -470,21 +470,15 @@ def get_N25_kinetic_data(sim_end, method_nr=1):
     # rename columns
     if method_nr == 1:
         ren = {'Abortive halted elongation': 'Abortive experiment',
-              'FL halted elongation': 'FL experiment'}
+               'FL halted elongation': 'FL experiment'}
     elif method_nr == 2:
         ren = {'Abortive competitive promoter': 'Abortive experiment',
-              'FL competitive promoter': 'FL experiment'}
+               'FL competitive promoter': 'FL experiment'}
 
     ts.rename(columns=ren, inplace=True)
 
-    # Insert 0 as the firrst row (is this actually helpful?)
-    #first_meas = pd.DataFrame(data={'Abortive experiment': 0.0,
-                                    #'FL experiment': 0.0},
-                              #index=[0.0])
-    #first_meas.append(ts)
-
     # let there be 1 timestep more in model than in simulation
-    t = ts[:sim_end-1]
+    t = ts[:sim_end - 1]
 
     return t
 
@@ -510,8 +504,8 @@ def compare_timeseries(exper, model):
     # Then rename 'FL' to 'FL model'
     model.rename(columns={'FL': 'FL model'}, inplace=True)
 
-    ren ={'Abortive competitive promoter': 'Abortive experiment',
-          'FL competitive promoter': 'FL experiment'}
+    ren = {'Abortive competitive promoter': 'Abortive experiment',
+           'FL competitive promoter': 'FL experiment'}
 
     experiment.rename(columns=ren, inplace=True)
 
@@ -522,16 +516,16 @@ def compare_timeseries(exper, model):
     experiment = experiment[:model.index[-2]]
 
     # Normalize N25 timeseries to max abortive RNA
-    experiment = experiment/experiment.max().max()
+    experiment = experiment / experiment.max().max()
 
     # Normalize the model RNA to max abortive RNA
-    model = model/model.max().max()
+    model = model / model.max().max()
 
     # Get the values in the model closest to those in the experiment using
     # linear interpolation
     #combined_index = pd.concat([model, experiment]).sort_index().interpolate()
     joined = pd.concat([model, experiment]).sort_index().\
-              interpolate().reindex(experiment.index)
+                       interpolate().reindex(experiment.index)
 
     f, ax = plt.subplots()
     joined.plot(ax=ax)
@@ -651,7 +645,7 @@ def productive_species(nr_unproductive_RNA, transcript_fraction):
     vector2b = []
     # Subtract 1 for FL: assumes all experiments have FL (that's true for DG100 and DG400)
     #nr_nonzero_transcript_lengths = sum(Y>0) - 1
-    nr_nonzero_transcript_lengths = sum(Y>0)
+    nr_nonzero_transcript_lengths = sum(Y > 0)
     # iterate over the indices of Y that are non-zero (will be 1,2,3..14 and
     # 21) for FL at the end
     for i in range(nr_rnas):

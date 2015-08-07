@@ -115,7 +115,7 @@ class ITModel(object):
         Returns a Pandas dataframe for all RNA species.
         """
 
-        species_names = ['rna_{0}'.format(i) for i in range(2,21)] + ['FL']
+        species_names = ['rna_{0}'.format(i) for i in range(2, 21)] + ['FL']
 
         #species_names += ['productive open complex']
         #species_names += ['unproductive open complex']

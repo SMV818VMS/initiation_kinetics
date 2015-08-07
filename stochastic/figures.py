@@ -22,7 +22,6 @@ from collections import OrderedDict
 plt.ioff()
 
 import seaborn as sns
-from operator import attrgetter
 from ipdb import set_trace as debug  # NOQA
 from scipy.interpolate import InterpolatedUnivariateSpline as interpolate
 from scipy.optimize import curve_fit
@@ -34,169 +33,119 @@ fig_dir = os.path.join(here, 'figures')
 log_dir = 'Log'
 scrunch_db = os.path.join(log_dir, 'scrunch_fit_df_storage')
 
-# Global database for storing simulation results -- don't re-calculate when
-# you are using the excact same input. Just make sure there is no implicit
-# input changes that are not being serialized for the md5 sum
+# Database for storing simulation results
 simulation_storage = os.path.join(here, 'storage', 'shelve_storage_sim')
 
+# Global setting for max processors
+max_proc = 4
 
-def CalculateTranscripts(model):
+# Figure sizes in centimeter. Height is something you might set maually but
+# width should always be the maximum
+nar_width = 8.7
+biochemistry_width = 8.5
+current_journal_width = biochemistry_width
+
+
+def set_fig_size(f, x_cm, y_cm):
+
+    def cm2inch(cm):
+        return float(cm) / 2.54
+
+    x_inches = cm2inch(x_cm)
+    y_inches = cm2inch(y_cm)
+
+    f.set_size_inches(x_inches, y_inches)
+
+
+def tau_variation_plot():
     """
-    Get #RNA: aborted and FL. Calculate intensities and PY.
+    Plot taus for N25 (simulation), N25 (experiment) and N25 variants (anti,
+    A1, A1-anti). Can also make it for all.
     """
+    initial_RNAP = 1000
+    time_sim = 60 * 30
+    #variants = ['N25', 'N25anti', 'N25-A1', 'N25-A1anti']
+    variants = ['N25', 'N25anti', 'N25-A1anti']
 
-    sp = np.array(model.data_stochsim.species, dtype=np.int32)
-    lb = model.data_stochsim.species_labels
+    tss = get_multiple_dg100_timeseries(variants, initial_RNAP, time_sim)
 
-    # open complex index
-    oc_indx = lb.index('RNAPpoc')
+    # Extract only the FL part from the timeseires
+    fls = {k: v['FL'] for k, v in tss.items()}
 
-    # full length index (if it exists..?)
-    fl_indx = lb.index('RNAPflt')
+    half_lives(fls, initial_RNAP, include_experiment=True)
 
-    #test=np.array(
-            #[[10, 0, 0, 0],
-              #[9, 1, 0, 0],
-              #[9, 0, 1, 0],
-              #[8, 1, 1, 0],
-              #[7, 2, 1, 0],
-              #[7, 2, 0, 1],
-              #[8, 1, 0, 1],
-              #[7, 2, 0, 1],
-              #[7, 1, 1, 1],
-              #[7, 0, 2, 1],
-              #[8, 0, 1, 1],
-              #[8, 0, 0, 2],
-              #[8, 0, 0, 2],
-              #[7, 1, 1, 2]])
 
-    #diff = test[1:,0] - test[:-1,0]
-    # diff : array([-1,  0, -1, -1,  1, -1,  0,  1,  0])
-    #ch = diff == +1
-    # The ch-indices are the indices before the change happens: so we need to
-    # take the timestep in ch and subtract it from the timestep after, and then sum.
-    #abort = sum(test[ch, :] - test[np.roll(ch,1), :])
-    # XXX tried using shift from scipy: but there must be a bug! Some times
-    # the array was simply not shifted. Maybe it's not meant to be used on
-    # true/false arrays.
+def get_multiple_dg100_timeseries(variant_names, initial_RNAP, sim_end):
+    """
+    Get variant names for dg100 with (-GreB) and return their timeseries.
+    variant names can be a list of names: ['N25', 'DG136a'], or can be 'all'.
 
-    # If we are using the backstep method, then the amount of abortive
-    # hey hey, remember, the state is the # of species at each time step.
+    Return them in the order they came! No safety checks for uniqueness, be
+    responsible.
+    """
+    all_ITSs = data_handler.ReadData('dg100-new')
 
-    oc_change = sp[1:,oc_indx] - sp[:-1,oc_indx]
-    # Find those time indices where RNAP_000 grew with +1 (actually, it ends
-    # up being the indices of the time step before the change)
-    indx_before_abort = oc_change == +1
-    indx_after_abort = np.roll(indx_before_abort, 1)
-    abrt_rna = sum(sp[indx_before_abort,:] - sp[indx_after_abort, :])
+    if variant_names == 'all':
+         ITSs = all_ITSs
+    else:
+        # Can make it better: go through all its once, when you find a
+        # matching name, insert at position determined by index of name
+        ITSs = [''] * len(variant_names)
+        n2idx = {name: variant_names.index(name) for name in variant_names}
+        for its in all_ITSs:
+            if its.name in variant_names:
+                ITSs[n2idx[its.name]] = its
 
-    # XXX Something is funky here. The abrt_rna shows a value for RNAPflt.
-    # RNAPflt should not change when OC changes, so I would have expected the
-    # value for RNAPflt to be zero. XXX The problem disappeared ...
-    # XXX and returned ... it seems to be ... wait for it... stochastic
-    # XXX I can't reproduce it by just running several times. It might have
-    # something to do with rerunning afer debugging. it's weird.
-    #
-    # XXX Clue: it seems to happen whenever I change the amount of initial
-    # RNAP... something is not quite reset the way it should be. Fix is to
-    # leave ipython and go back.
+    use_sim_db = True
 
-    fl_rna = sp[:, fl_indx][-1]
+    p = Pool(max_proc)
+    results = []
+    sim_ids = []
 
-    # Tests. Check that the - number for the open complex corresponds to all
-    # the other aborted ones
-    assert sum(abs(abrt_rna)) == 2 * abs(abrt_rna[oc_indx])
-    assert abrt_rna[fl_indx] == 0  # full length abort not possible
-    assert fl_rna > 0  # if you get no FL RNA, something else is wrong
+    # Then we can rely on this order later
+    assert variant_names == [i.name for i in ITSs]
 
-    # Summarize in a lookup table
-    transcription_result = {'FL': fl_rna}
+    shelve_database = shelve.open(simulation_storage)
+    for its in ITSs:
 
-    for nr_hits, code in zip(abrt_rna, lb):
+        model = smr.get_kinetics(variant=its.name, initial_RNAP=initial_RNAP, sim_end=sim_end)
+        sim_id = model.calc_setup_hash()
+        sim_ids.append(sim_id)
 
-        # Skip non-abortive stuff
-        if nr_hits == 0:
-            continue
-
-        # Skip open complex
-        if code == 'RNAPpoc':
-            continue
-
-        # Bleh
-        infos = code[-3:]
-        if infos[1] == '_':
-            rna_len = infos[0]
+        if use_sim_db and sim_id in shelve_database:
+            results.append(None)
         else:
-            rna_len = infos[:2]
+            results.append(p.apply_async(model.run))
 
-        transcription_result[rna_len] = nr_hits
+    p.close()
+    p.join()
 
-    return transcription_result
+    timeseries = OrderedDict()
+    for sim_id, r, name in zip(sim_ids, results, variant_names):
+        if use_sim_db and sim_id in shelve_database:
+            ts = shelve_database[sim_id]
+        else:
+            ts = r.get()
+            shelve_database[sim_id] = ts
+        timeseries[name] = ts
+    shelve_database.close()
+
+    return timeseries
 
 
 def initial_transcription_stats():
     """
     Run stochastic simulations on all the DG100 library variants
     """
-    ITSs = data_handler.ReadData('dg100-new')
-    ITSs = sorted(ITSs, key=attrgetter('PY'))
 
-    # Setup
-    initial_RNAP = 500
-    end = 60. * 30  # just keep it big; it doesn't matter. Quick ones will
-    #finish in their own time.
+    initial_RNAP = 1000
 
-    use_sim_db = True
-    #use_sim_db = False
-    #plot_species = [....]
-
-    screen = False
-    #screen = True
-    #subset = ['N25', 'N25-A1anti']
-    subset = ['N25']
-    #subset = ['N25-A1anti']
-
-    p = Pool()
-    results = []
-    sim_ids = []
-
-    for its in ITSs:
-        ## Filter out some specific ones
-        if screen and its.name not in subset:
-            continue
-
-        model = smr.get_kinetics(variant=its.name, initial_RNAP=initial_RNAP,
-                                 sim_end=end)
-        sim_id = model.calc_setup_hash()
-        sim_ids.append(sim_id)
-
-        shelve_database = shelve.open(simulation_storage)
-        if use_sim_db and sim_id in shelve_database:
-            ts = shelve_database[sim_id]
-        else:
-            results.append(p.apply_async(model.run))
-        shelve_database.close()
-
-        #if do_plot_timeseries:
-            #plot_timeseries(its.name, ts, species)
-    p.join()
-    p.close()
-
-    timeseries = []
-    shelve_database = shelve.open(simulation_storage)
-    for sim_id, r in zip(sim_ids, results):
-        if sim_id in shelve_database:
-            ts = shelve_database[sim_id]
-        else:
-            ts = r.get()
-            shelve_database[sim_id] = ts
-        timeseries.append(ts)
-    shelve_database.close()
+    tss = get_multiple_dg100_timeseries('all', initial_RNAP, 5000)
 
     # Keep all rnas to make a box plot after.
     all_rnas = {}
     all_FL_timeseries = {}
-    for its_name, ts in zip([i.name for i in ITSs], timeseries):
+    for its_name, ts in tss.items():
 
         all_rnas[its_name] = ts.iloc[-1].values
         all_FL_timeseries[its_name] = ts['FL']
@@ -262,19 +211,19 @@ def calc_AP_anew(transcripts):
 
     index_range = range(len(nt_range))  # +1 for FL
     # percentage abortive yield at each x-mer
-    pct_yield = [(ay/total_rna)*100. for ay in abortive_rna]
+    pct_yield = [(ay / total_rna) * 100. for ay in abortive_rna]
 
     # amount of RNA produced from here and out
     rna_from_here = [np.sum(abortive_rna[i:]) + fl_transcript for i in index_range]
 
     # percent of RNAP reaching this position
-    pct_rnap = [(rfh/total_rna)*100. for rfh in rna_from_here]
+    pct_rnap = [(rfh / total_rna) * 100. for rfh in rna_from_here]
 
     # probability to abort at this position
     # More accurately: probability that an abortive RNA of length i is
     # produced (it may backtrack and be slow to collapse, producing
     # little abortive product and reducing productive yield)
-    ap = [pct_yield[i]/pct_rnap[i] for i in index_range]
+    ap = [pct_yield[i] / pct_rnap[i] for i in index_range]
 
     return ap
 
@@ -306,7 +255,7 @@ def AP_recalculated(ITSs, all_rnas):
 
         title = 'AP: model vs experiment for {2}\n Spearman correlation: {0}\n Pearson correlation: {1}'.format(corrs, corrp, its_name)
 
-        index = range(2, len(new_AP)+2)
+        index = range(2, len(new_AP) + 2)
 
         fig, ax = plt.subplots()
         mydf = pd.DataFrame(data=data, index=index)
@@ -323,57 +272,7 @@ def AP_recalculated(ITSs, all_rnas):
         plt.close(fig)
 
 
-def plot_timeseries(name, ts, species):
-    """
-    Just plot timeseries data.
-    """
-
-    pass
-
-    #sp_2_label = {'RNAPpoc': 'Productive open complex',
-                  #'RNAPuoc': 'Unproductive open complex',
-                  #'RNAPflt': 'Full length transcript',
-                  #'RNAP2_b': '2nt abortive RNA',
-                  #'RNAP3_b': '3nt abortive RNA',
-                  #'RNAP4_b': '4nt abortive RNA',
-                  #'RNAP6_b': '6nt abortive RNA',
-                  #'RNAP7_b': '7nt abortive RNA',
-                  #'RNAP8_b': '8nt abortive RNA'
-                  #}
-
-    # f, ax = plt.subplots()
-    #ts[species].plot()
-
-    #ax.set_ylabel('# of species')
-    #ax.set_xlabel('Time (seconds)')
-
-    #file_name = 'Timeseries_{0}.pdf'.format(name)
-
-    #file_path = os.path.join(fig_dir, file_name)
-
-    #f.suptitle('Stochastic simulation of initial transcription for {0}'.format(name))
-    #f.tight_layout()
-    #f.savefig(file_path, format='pdf')
-
-    ## Explicitly close figure to save memory
-    #plt.close(f)
-
-
-def GetFLTimeseries(sim):
-
-    fl_index = sim.data_stochsim.species_labels.index('RNAPflt')
-
-    data = sim.data_stochsim.species[:, fl_index]
-    time = sim.data_stochsim.time
-
-    df = pd.DataFrame({'FL': data}, index=time)
-
-    # So you end up with a huge array of almost identical values. Trim so that
-    # you only keep the values when there is a change.
-    return df.drop_duplicates(cols='FL')
-
-
-def half_lives(all_FL_timeseries, nr_RNAP):
+def half_lives(FL_timeseries, nr_RNAP, include_experiment=False):
     """
     For each variant, calculate the half life of FL. That means you got to
     calculate until the end of the simulation. Use just 100 NTPs and hope it's
@@ -389,9 +288,9 @@ def half_lives(all_FL_timeseries, nr_RNAP):
     # file? Bleh, you're probably going to be re-running simulations for a
     # while.
 
-    for its_name, timeseries in all_FL_timeseries.items():
+    for its_name, timeseries in FL_timeseries.items():
 
-        hl_index = timeseries[timeseries==nr_RNAP/2].index.tolist()
+        hl_index = timeseries[timeseries == nr_RNAP / 2].index.tolist()
         # For the cases where you don't simulate long enough to reach a half
         # life (or you are not using an even number of RNAP ... :S)
         if hl_index == []:
@@ -401,21 +300,43 @@ def half_lives(all_FL_timeseries, nr_RNAP):
 
         data[its_name] = half_life
 
+    if include_experiment:
+        data['N25\nexperiment'] = 13.7  # Vo et. al 2003 (my value after interpolation)
+
     df = pd.DataFrame(data, index=['t_1/2']).T
-    # Sort by increasing t_1/2
+    ren = {'N25': 'N25\nsimulation',
+           'N25anti': 'N25-anti\nsimulation',
+           'N25-A1anti': 'N25-A1-anti\nsimulation'}
+    df.rename(ren, inplace=True)
     df = df.sort('t_1/2')
 
-    f, ax = plt.subplots()
-    df.plot(kind='bar', ax=ax, rot=80, legend=False)
+    #if include_experiment:
+        #colors = ['Gray'] * (len(FL_timeseries) + 1)
+        #variants = df.index.tolist()
+        #expt = variants.index('N25e')
+        #sim = variants.index('N25')
+        #colors[expt] = 'DarkBlue'
+        #colors[sim] = 'Blue'
+    #else:
+        #colors = ['Gray'] * len(FL_timeseries)
 
-    ax.set_ylabel('Time (seconds)')
+    f, ax = plt.subplots()
+    if include_experiment:
+        rot = 0
+    else:
+        rot = 80
+    df.plot(kind='bar', ax=ax, rot=rot, legend=False, fontsize=10)
+
+    ax.set_ylabel('$\\tau$ (s)')
 
     file_name = 'Time_to_reach_fifty_percent_of_FL.pdf'
 
     file_path = os.path.join(fig_dir, file_name)
 
-    f.suptitle('Time to reach 50% of FL product')
     f.tight_layout()
+
+    #set_fig_size(f, current_journal_width, 8)
+
     f.savefig(file_path, format='pdf')
 
     # Explicitly close figure to save memory
@@ -511,7 +432,7 @@ def fold_diff_PY_correlations(ITSs, data_frac):
     corrs, pvals = spearmanr(prod_yield, fold_diff_metric)
     corrp, pvalp = pearsonr(prod_yield, fold_diff_metric)
     f, ax = plt.subplots()
-    ax.scatter(prod_yield*100., fold_diff_metric)
+    ax.scatter(prod_yield * 100., fold_diff_metric)
 
     ax.set_xlabel('PY')
     ax.set_ylabel('Sum(fold difference after +6) - Sum(fold difference before +6)')
@@ -531,7 +452,7 @@ def fold_diff_PY_correlations(ITSs, data_frac):
     fl = np.asarray(fl_fold)
     corrs, pvals = spearmanr(prod_yield, fl)
     f, ax = plt.subplots()
-    ax.scatter(prod_yield*100., fl)
+    ax.scatter(prod_yield * 100., fl)
 
     ax.set_xlabel('PY')
     ax.set_ylabel('Fold difference model/experiment of percent FL transcript')
@@ -567,7 +488,7 @@ def box_plot_model_exp_frac(data, data_range, title):
 
     EU = mpatches.Patch(color='blue', label='More QI signal than model RNA')
     NA = mpatches.Patch(color='green', label='More model RNA than QI signal')
-    ax.legend(handles=[NA,EU], loc=2)
+    ax.legend(handles=[NA, EU], loc=2)
 
     ax.set_ylabel("Fold difference of % QI units and % model RNA")
 
@@ -599,9 +520,9 @@ def box_plot_model_exp(data, data_range, title):
     df_long = pd.melt(mydf_t, separator, var_name=varname, value_name=valname)
     f, ax = plt.subplots()
     sns.factorplot(varname, hue=separator, y=valname, data=df_long,
-                    kind="box", ax=ax, sym='')  # sym='' to get rid of outliers
+                   kind="box", ax=ax, sym='')  # sym='' to get rid of outliers
 
-    ax.set_ylim(0,50)
+    ax.set_ylim(0, 50)
     if title:
         f.suptitle(title)
         file_name = 'Model_and_experiment_{0}.pdf'.format(title)
@@ -637,9 +558,9 @@ def calc_frac_diff(arr1, arr2):
             diff = np.nan
         else:
             if val1 > val2:
-                diff = float(val1)/val2
+                diff = float(val1) / val2
             else:
-                diff = -float(val2)/val1
+                diff = -float(val2) / val1
 
         frac_diff.append(diff)
 
@@ -688,7 +609,7 @@ def write_bar_plot(nr_rna, its):
 
     # Prepare for making a dataframe
     forDF = {'Experiment': pct_values_experiment,
-            'Model': pct_values_model}
+             'Model': pct_values_model}
     index = data_range + ['FL']
 
     fig, ax = plt.subplots()
@@ -737,7 +658,7 @@ def AP_and_pct_values_distributions_DG100():
             # AP stats
             f = attrgetter(ab_meth)
             aps = np.asarray([f(i) for i in dset])
-            aps[aps<=0.0] = np.nan
+            aps[aps <= 0.0] = np.nan
 
             ap_mean = np.nanmean(aps, axis=0)
             ap_std = np.nanstd(aps, axis=0)
@@ -751,8 +672,8 @@ def AP_and_pct_values_distributions_DG100():
             data_AP_std[name] = ap_std * 100.
 
         f, ax = plt.subplots()
-        df = pd.DataFrame(data=data_AP_mean, index=range(2,21) + ['FL'])
-        df_err = pd.DataFrame(data=data_AP_std, index=range(2,21) + ['FL'])
+        df = pd.DataFrame(data=data_AP_mean, index=range(2, 21) + ['FL'])
+        df_err = pd.DataFrame(data=data_AP_std, index=range(2, 21) + ['FL'])
         df.plot(kind='bar', yerr=df_err, ax=ax)
 
         ax.set_xlabel('ITS position')
@@ -773,7 +694,7 @@ def AP_and_pct_values_distributions_DG100():
 
         # Remember to get nans where there is zero!!
         ar = np.asarray([i.fraction * 100. for i in dset])
-        ar[ar<=0.0] = np.nan
+        ar[ar <= 0.0] = np.nan
         data_mean = np.nanmean(ar, axis=0)
         data_std = np.nanstd(ar, axis=0)
 
@@ -781,8 +702,8 @@ def AP_and_pct_values_distributions_DG100():
         data_pct_std[name] = data_std
 
     f, ax = plt.subplots()
-    df = pd.DataFrame(data=data_pct_mean, index=range(2,21) + ['FL'])
-    df_err = pd.DataFrame(data=data_pct_std, index=range(2,21) + ['FL'])
+    df = pd.DataFrame(data=data_pct_mean, index=range(2, 21) + ['FL'])
+    df_err = pd.DataFrame(data=data_pct_std, index=range(2, 21) + ['FL'])
     df.plot(kind='bar', yerr=df_err, ax=ax)
 
     ax.set_xlabel('ITS position')
@@ -798,7 +719,7 @@ def AP_and_pct_values_distributions_DG100():
 
 def get_2003_FL_kinetics(method=1):
 
-    data ='/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/vo_2003'
+    data = '/home/jorgsk/Dropbox/phdproject/transcription_initiation/data/vo_2003'
     m1 = os.path.join(data, 'Fraction_FL_and_abortive_timeseries_method_1_FL_only.csv')
     m2 = os.path.join(data, 'Fraction_FL_and_abortive_timeseries_method_2_FL_only.csv')
 
@@ -811,8 +732,8 @@ def get_2003_FL_kinetics(method=1):
     df2.index = df2.index * 60
 
     # Normalize
-    df1_norm = df1/df1.max()
-    df2_norm = df2/df2.max()
+    df1_norm = df1 / df1.max()
+    df2_norm = df2 / df2.max()
 
     # Add initial 0 value
     df1_first = pd.DataFrame(data={'FL halted elongation': 0.0}, index=[0.0])
@@ -836,7 +757,7 @@ def fit_FL(x, y):
     """
 
     def saturation(x, a, b, c):
-        return a + b*(1 - np.exp(-c*x))
+        return a + b * (1 - np.exp(-c * x))
 
     popt, pcov = curve_fit(saturation, x, y)
 
@@ -867,8 +788,8 @@ def simple_vo_2003_comparison():
     f1, ax = plt.subplots()
     # Get and plot model data
     greb_minus_model = smr.get_kinetics(variant='N25', GreB=False,
-                                  escape_RNA_length=14, initial_RNAP=1000,
-                                  sim_end=60.5)
+                                        escape_RNA_length=14,
+                                        initial_RNAP=1000, sim_end=60.5)
     greb_minus = greb_minus_model.run()['FL']
     gm = greb_minus / greb_minus.max()
     gm.plot(ax=ax, color='c')
@@ -939,17 +860,17 @@ def revyakin_fit_plot():
     df_mean = pd.DataFrame(data={'NAC': NAC_mean,
                                  'Escape': escape_mean,
                                  'Unscrunch': unscrunch_mean},
-                           index=range(1, len(NAC_mean)+1))
+                           index=range(1, len(NAC_mean) + 1))
 
-    dict_err={'NAC': NAC_std, 'Escape': escape_std, 'Unscrunch': unscrunch_std}
+    dict_err = {'NAC': NAC_std, 'Escape': escape_std, 'Unscrunch': unscrunch_std}
     df_mean = df_mean[dict_err.keys()]  # get df in same order as dict
 
     f, axes = plt.subplots(3)
     df_mean.plot(subplots=True, ax=axes, yerr=dict_err,
                  sharex=True,
-                 xlim=(0.5, len(NAC_mean)+0.5),
-                 xticks=range(1, len(NAC_mean)+1),
-                 ylim=(0,26),
+                 xlim=(0.5, len(NAC_mean) + 0.5),
+                 xticks=range(1, len(NAC_mean) + 1),
+                 ylim=(0, 26),
                  legend=False,
                  rot=0)
 
@@ -958,8 +879,9 @@ def revyakin_fit_plot():
     for ax, rc in zip(axes, df_mean.columns):
         ax.set_ylabel('{0} (1/s)'.format(rc))
 
-    add_letters(axes, ['A', 'B', 'C'], ['UL']*3)
+    add_letters(axes, ['A', 'B', 'C'], ['UL'] * 3)
 
+    #set_fig_size(f, current_journal_width, 8)
     f.savefig(os.path.join(fig_dir, 'parameter_estimation_cycles.pdf'))
 
     # Print to screen
@@ -967,6 +889,11 @@ def revyakin_fit_plot():
     print(df_mean)
     print('Std')
     print(pd.DataFrame(data=dict_err, index=df_mean.index))
+
+    # Also print Tau from Vo to have it at hand
+    tau = get_tau(1000, 2000, NAC_mean[-1], unscrunch_mean[-1], escape_mean[-1])
+    print('Tau from Vo et al')
+    print(tau)
 
 
 def revyakin_fit_calc():
@@ -989,12 +916,9 @@ def revyakin_fit_calc():
     #GreB = False
     GreB = True
 
-    samples_per_cycle = 100
+    samples_per_cycle = 200
     cycles = 4
     boundaries = False
-
-    #calculate = True
-    calculate = False
 
     plot = False
     #plot = True
@@ -1006,38 +930,25 @@ def revyakin_fit_calc():
     params_per_cycle = OrderedDict()
     shelve_database = shelve.open(simulation_storage)
     for cycle in range(cycles):
-        if not calculate:
-            continue
 
         log_name = '{0}-RNAP_{1}-samples_{2}-GreB_scrunch_cycle_{3}'.format(initial_RNAP,
-                                                                 samples_per_cycle,
-                                                                 GreB, cycle)
+                                                                            samples_per_cycle,
+                                                                            GreB, cycle)
 
         params = get_parameters(samples=samples_per_cycle, GreB=GreB,
                                 boundaries=boundaries)
         stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
 
         search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
-                               initial_RNAP, sim_end, params, plot, log_name)
+                               initial_RNAP, sim_end, params, plot, log_name,
+                               False)
 
-        boundaries, stats = get_weighted_parameter_distributions(log_name,
-                                                          return_stats=True)
+        boundaries, stats = get_weighted_parameter_distributions(log_name)
 
         params_per_cycle[cycle] = stats
 
     shelve_database['params'] = params_per_cycle
     shelve_database.close()
-
-
-def plot_iterative_improvement(params_per_cycle):
-    """
-    {0: {'Abort':  (10.7, 5.1),
-         'Escape': (13.9, 7.0),
-         'NAC':    (13.0, 7.2)},
-     1: {'Abort':  (11.0, 2.7),
-         'Escape': (14.6, 3.3),
-         'NAC':    (11.4, 3.1)}}
-    """
 
 
 def add_letters(axes, letters, positions, shiftX=0, shiftY=0):
@@ -1046,8 +957,8 @@ def add_letters(axes, letters, positions, shiftX=0, shiftY=0):
     for example')
     """
 
-    xy = {'x': {'UL': 0.03, 'UR': 0.85},
-          'y': {'UL': 0.97, 'UR': 0.97}}
+    xy = {'x': {'UL': 0.01, 'UR': 0.85},
+          'y': {'UL': 0.98, 'UR': 0.97}}
 
     for pos, label, ax in zip(positions, letters, axes):
         ax.text(xy['x'][pos] + shiftX,
@@ -1059,8 +970,8 @@ def add_letters(axes, letters, positions, shiftX=0, shiftY=0):
 def get_weighted_parameter_distributions(log_name):
 
     # Use the top 20 results to decide on new parameter values
-    #top = 20
-    top = 15
+    top = 20
+    #top = 15
 
     fitness_log_file = os.path.join(log_dir, log_name + '.log')
     df = pd.read_csv(fitness_log_file, sep='\t', header=0)
@@ -1155,7 +1066,7 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
     log_handle.write('Fit\tFit_extrap\tNac\tAbort\tEscape\n')
 
     if multiproc:
-        pool = Pool()
+        pool = Pool(max_proc)
         results = []
 
     for nac, abrt, escape in params:
@@ -1187,7 +1098,7 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
     if multiproc:
         pool.close()
         pool.join()
-        model_timeseries = [r.get() for r in results]
+        model_timeseries = [res.get() for res in results]
         for ts, pars in zip(model_timeseries, params):
             nac, abrt, escape = pars
             ms = calc_scrunch_distribution(ts, initial_RNAP)
@@ -1264,7 +1175,7 @@ def plot_scrunch_distributions(model_scrunches, expt, expt_extrapolated,
 
         if logy:
             ax.set_xlim(0, 30)
-            ax.set_xticks(range(0,21))
+            ax.set_xticks(range(0, 21))
             filename = 'scrunch_times_cumulative_logy_{0}.pdf'.format(title)
         else:
             filename = 'scrunch_times_cumulative_{0}.pdf'.format(title)
@@ -1338,14 +1249,14 @@ def get_experiment_scrunch_distribution():
     y = df_measurements['inverse_cumul_experiment']
 
     def neg_exp(x, a):
-        return np.exp(-a*x)
+        return np.exp(-a * x)
 
     popt, pcov = curve_fit(neg_exp, x, y)
 
     # Make some preductions from this simple model
     xx = np.linspace(0, 40, 1000)
     y_extrapolated = neg_exp(xx, popt[0])
-    df_extrapolated = pd.DataFrame(data={'extrap_inv_cumul':y_extrapolated}, index=xx)
+    df_extrapolated = pd.DataFrame(data={'extrap_inv_cumul': y_extrapolated}, index=xx)
 
     return df_measurements, df_extrapolated
 
@@ -1365,7 +1276,7 @@ def calc_scrunch_distribution(df, initial_RNAP):
     time = df.index[1:]
     escape_times = time[escapes == 1]
 
-    integrated_probability = np.linspace(1, 1/float(initial_RNAP), initial_RNAP)
+    integrated_probability = np.linspace(1, 1 / float(initial_RNAP), initial_RNAP)
 
     data = {'inverse_cumul_model': integrated_probability}
 
@@ -1440,12 +1351,8 @@ def ap_sensitivity_calc():
     #GreB = False
     GreB = True
 
-    samples_per_cycle = 40
-    cycles = 3
-    boundaries = False
-
-    calculate = True
-    #calculate = False
+    samples_per_cycle = 200
+    cycles = 4
 
     plot = False
     #plot = True
@@ -1453,31 +1360,23 @@ def ap_sensitivity_calc():
     multiproc = True
     #multiproc = False
 
-    # parameter estimation (and later, the fit to Vo et. al)
-    #adjust_ap_each_position = 10  # percent to add
-    adjust_ap_each_position = False
-
-    #ap_adjusts = range(-15, 16, 2)   # later for the 'full' show
-    ap_adjusts = range(-3, 4, 2)
-
-    # The second should be plots of change in NAC and Tau with % increase and
-    # decrease in abortive probability at each abortive position.
+    ap_adjusts = range(-15, 16, 6)   # later for the 'full' show
+    #ap_adjusts = range(-5, 6, 2)
+    #ap_adjusts = range(-5, 6, 10)
 
     # You need to save the optimal NAC and the tau obtained with the optimal
-    # nacs
     names = ['NAC', 'Escape', 'Unscrunch']
 
     # When unpacking you can rely on getting cycle-order
     ap_adjust_effect = OrderedDict()
     for ap_adjustment in ap_adjusts:
         optimal_values = OrderedDict()
+        boundaries = False  # Important! Start off with fresh boundaries before each cycle
         for cycle in range(cycles):
-            if not calculate:
-                continue
 
-            log_name = '{0}-RNAP_{1}-samples_{2}-GreB_scrunch_cycle_{3}'.format(initial_RNAP,
-                                                                             samples_per_cycle,
-                                                                             GreB, cycle)
+            log_str = '{0}-RNAP_{1}-samples_{2}-GreB_scrunch_cycle_{3}_ap_adjust{4}'
+            log_name = log_str.format(initial_RNAP, samples_per_cycle, GreB,
+                                      cycle, ap_adjustment)
 
             params = get_parameters(samples=samples_per_cycle, GreB=GreB,
                                     boundaries=boundaries)
@@ -1485,17 +1384,17 @@ def ap_sensitivity_calc():
 
             search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
                                    initial_RNAP, sim_end, params, plot, log_name,
-                                   adjust_ap_each_position)
+                                   ap_adjustment)
 
             boundaries, stats = get_weighted_parameter_distributions(log_name)
 
-            optimal_values[cycle] = {n:stats[n][0] for n in names}
+            optimal_values[cycle] = {n: stats[n][0] for n in names}
 
         # Extract the final optimal values from the last simulation
-        final_optimal = {n:optimal_values[cycles-1][n] for n in names}
+        final_optimal = {n: optimal_values[cycles - 1][n] for n in names}
 
         # Get half life of FL synthesis for -GreB N25
-        tau = get_tau(500, sim_end,
+        tau = get_tau(1000, sim_end,
                       final_optimal['NAC'],
                       final_optimal['Unscrunch'],
                       final_optimal['Escape'])
@@ -1503,6 +1402,7 @@ def ap_sensitivity_calc():
         ap_adjust_effect[ap_adjustment] = {'NAC': final_optimal['NAC'],
                                            'Tau': tau}
 
+    #return
     shelve_database = shelve.open(simulation_storage)
     shelve_database['ap_adjust'] = ap_adjust_effect
     shelve_database.close()
@@ -1537,16 +1437,19 @@ def ap_sensitivity_plot():
     shelve_db = shelve.open(simulation_storage)
     ap_adjust_effect = shelve_db['ap_adjust']
     shelve_db.close()
-    ap_adjust_effect[0] = {'NAC': 10.2, 'Tau': 14.2}  # XXX get from global "correct" value?
+    ap_adjust_effect[0] = {'NAC': 10.4, 'Tau': 17.5}  # XXX get from global "correct" value?
 
     # The indices from -x to + x now including 0
     adjusts = sorted(ap_adjust_effect.keys())
 
     data = {}
     data['NAC'] = [ap_adjust_effect[i]['NAC'] for i in adjusts]
+    #data['NAC_rel'] = [ap_adjust_effect[i]['NAC'] for i in adjusts]
     data['Tau'] = [ap_adjust_effect[i]['Tau'] for i in adjusts]
 
     df = pd.DataFrame(data=data, index=adjusts)
+    # Normalize NAC rel relative to average (pos/neg supercoil) elongation speed from Revyakin: 11.65
+    #df['NAC_rel'] = df['NAC_rel'] / 11.65
 
     f, axes = plt.subplots(2)
 
@@ -1554,14 +1457,58 @@ def ap_sensitivity_plot():
             legend=False, label=False, title=None)
 
     axes[0].set_ylabel('NAC (1/s)')
-    axes[1].set_ylabel('Tau (s)')
-    axes[1].set_xlabel('Percent increase in AP at each ITS position before promoter escape')
+    #axes[1].set_ylabel('NAC relative to elongation')
+    axes[1].set_ylabel('$\\tau$ (s)')
+    axes[1].set_xlabel('Increase in AP at each ITS position (%)')
 
     # Pandas bug
     axes[0].set_title('')
     axes[1].set_title('')
+    #axes[2].set_title('')
+
+    add_letters(axes, ['A', 'B'], ['UL'] * 2)
 
     f.savefig(os.path.join(fig_dir, 'ap_adjustment.pdf'))
+
+
+def fraction_scrunches_less_than_1_second_calc():
+
+    # Setup
+    initial_RNAP = 100
+    sim_end = 1000
+    escape_RNA_length = 14
+    GreB = True
+
+    #samples = range(1000)
+    samples = range(1000)
+
+    p = Pool(max_proc)
+    results = []
+
+    # When unpacking you can rely on getting cycle-order
+    ts = {}
+    for sample in samples:
+        model = smr.get_kinetics('N25', initial_RNAP=initial_RNAP,
+                                 sim_end=sim_end, GreB=GreB,
+                                 escape_RNA_length=escape_RNA_length)
+        args = {'include_elongation': True}
+        r = p.apply_async(model.run, args)
+        results.append(r)
+    p.close()
+    p.join()
+
+    fracs = []
+
+    for r, sample_nr in zip(results, samples):
+        ts = r.get()
+        model_scrunches = calc_scrunch_distribution(ts, initial_RNAP)
+        up_to_one = model_scrunches[:1]
+        if not up_to_one.empty:
+            less_than_1_sec_frac = 1 - up_to_one.iloc[-1]
+        fracs.append(less_than_1_sec_frac)
+
+    print np.mean(fracs)
+    print np.std(fracs)
 
 
 def main():
@@ -1582,10 +1529,19 @@ def main():
     # Obtain the best parameters for N25 +Greb with extra percentages to AP.
     # +/- 1 to +/- 10 for example. Plot NAC and Tau (Vo).
     #ap_sensitivity_calc()
-    ap_sensitivity_plot()
+    #ap_sensitivity_plot()
+    # would it be helpful to show a bar plot of the modified abortive
+    # probabilities? Yes, and for Tau some kinetic plots as well just to drive
+    # the point in. But for the nonce it will do. Now, you need to write :)
+    # Actually, people will want to see the fit as well. With some mini-plots
+    # I'm sure you can do it. Invent a measure: 1-std
+
+    tau_variation_plot()
+    #fraction_scrunches_less_than_1_second_calc()
 
     # Fitting to ensemble studies
     #simple_vo_2003_comparison()
+
 
 if __name__ == '__main__':
     main()
