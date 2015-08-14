@@ -17,7 +17,7 @@ import data_handler
 import stochastic_model_run as smr
 import matplotlib.pyplot as plt
 from multiprocessing import Pool
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 
 plt.ioff()
 
@@ -1394,13 +1394,11 @@ def ap_sensitivity_calc():
         final_optimal = {n: optimal_values[cycles - 1][n] for n in names}
 
         # Get half life of FL synthesis for -GreB N25
-        tau = get_tau(1000, sim_end,
-                      final_optimal['NAC'],
-                      final_optimal['Unscrunch'],
-                      final_optimal['Escape'])
+        #tau = get_tau(1000, sim_end, final_optimal['NAC'], final_optimal['Unscrunch'],
+                      #final_optimal['Escape'])
+        tau = get_tau(1000, sim_end, **final_optimal)
 
-        ap_adjust_effect[ap_adjustment] = {'NAC': final_optimal['NAC'],
-                                           'Tau': tau}
+        ap_adjust_effect[ap_adjustment] = {'NAC': final_optimal['NAC'], 'Tau': tau}
 
     #return
     shelve_database = shelve.open(simulation_storage)
@@ -1408,7 +1406,7 @@ def ap_sensitivity_calc():
     shelve_database.close()
 
 
-def get_tau(initial_RNAP, sim_end, nac, unscrunch, escape):
+def get_tau(initial_RNAP, sim_end, NAC, Unscrunch, Escape):
     """
     Returns half-life of 100% FL synthesis
     """
@@ -1417,9 +1415,9 @@ def get_tau(initial_RNAP, sim_end, nac, unscrunch, escape):
                                         escape_RNA_length=14,
                                         initial_RNAP=initial_RNAP,
                                         sim_end=sim_end,
-                                        nac=nac,
-                                        escape=escape,
-                                        unscrunch=unscrunch)
+                                        nac=NAC,
+                                        escape=Escape,
+                                        unscrunch=Unscrunch)
 
     greb_minus = greb_minus_model.run()['FL']
     gm = greb_minus / greb_minus.max()
@@ -1511,6 +1509,79 @@ def fraction_scrunches_less_than_1_second_calc():
     print np.std(fracs)
 
 
+def sensitivity_analysis():
+    """
+    Calculate the partial derivative of an output relative to each of the rate
+    constants: delta(X)/X / delta(k)/k
+
+    Let X be tau: the half-life to FL. In mathematical terms, we could
+    formulate tau. If Y was the # of FL produced, they X = Y(t_1), where t_1
+    is found by solving Y(t) = Z(0)/2, where Z is the # of complexes in open
+    formation.
+
+    Result: this is looking good! But increase the range to perhaps 30% and
+    increase the number of RNAPs to 5000 to reduce noise. Parallelize the
+    beast, and then do a simple plot
+    """
+
+    init_rcs = {'NAC': 10.5, 'Escape': 12.4, 'Unscrunch': 1.6}
+
+    init_rnap = 1000
+
+    perturbations = range(-10, 10, 1)
+    init_tau = get_tau(init_rnap, 1000, **init_rcs)
+
+    shelve_database = shelve.open(simulation_storage)
+
+    # Perturbations from -10% to 10% in steps of 1.
+    effects = defaultdict(list)
+    for rc_name, init_rc in init_rcs.items():
+        for pb in perturbations:
+            # Perturb the rate constant and insert it in a dictionary
+            pert_rc = init_rc * (1. + float(pb)/100.)
+            pert_rcs = init_rcs.copy()
+            pert_rcs[rc_name] = pert_rc
+
+            pert_tau = get_tau(init_rnap, 1000, **pert_rcs)
+
+            dtau = pert_tau / init_tau
+            drc = pert_rc / init_rc
+            sensitivity = dtau / drc
+
+            effects[rc_name].append(sensitivity)
+
+    shelve_database['sensitivities'] = (effects, perturbations)
+    shelve_database.close()
+
+
+def plot_sensitivity_analysis():
+
+    shelve_database = shelve.open(simulation_storage)
+    effects, perturbations = shelve_database['sensitivities']
+    shelve_database.close()
+
+    for key, vals in effects.items():
+        print key
+        print vals
+
+    df = pd.DataFrame(data=effects, index=perturbations)
+
+    f, axes = plt.subplots(3)
+
+    df.plot(ax=axes, subplots=True, sharex=True)
+
+    y_min = df.min().min()
+    y_max = df.max().max()
+
+    axes[-1].set_xlabel('Perturbation (%)')
+    for ax in axes:
+        ax.set_ylim(y_min, y_max)
+
+    file_name = 'sensitivity_plot.pdf'
+    file_path = os.path.join(fig_dir, file_name)
+    f.savefig(file_path, format='pdf')
+
+
 def main():
 
     # Distributions of % of IQ units and #RNA
@@ -1536,11 +1607,15 @@ def main():
     # Actually, people will want to see the fit as well. With some mini-plots
     # I'm sure you can do it. Invent a measure: 1-std
 
-    tau_variation_plot()
+    #tau_variation_plot()
     #fraction_scrunches_less_than_1_second_calc()
 
     # Fitting to ensemble studies
     #simple_vo_2003_comparison()
+
+    # Local sensitivity analysis
+    #sensitivity_analysis()
+    plot_sensitivity_analysis()
 
 
 if __name__ == '__main__':
