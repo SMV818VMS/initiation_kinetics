@@ -242,6 +242,14 @@ def main():
     """
     pass
 
+    # StreZ TeZt
+    p = Pool()
+    for _ in range(4):
+        model = get_kinetics('N25', initial_RNAP=10000)
+        p.apply_async(model.run)
+    p.close()
+    p.join()
+
     # XXX not good :(
     #revyakin_datafit_new()
 

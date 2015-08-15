@@ -905,6 +905,9 @@ def revyakin_fit_calc():
     The method is very sensitive to the initial number of simulations. It's
     important to start with a very high number. Subsequent steps mostly reduce
     uncertainty.
+
+    XXX the simulations no longer converge to the same value. You have changed
+    something. Whatisit?
     """
     # Setup
     variant_name = 'N25'
@@ -916,7 +919,7 @@ def revyakin_fit_calc():
     #GreB = False
     GreB = True
 
-    samples_per_cycle = 200
+    samples_per_cycle = 400
     cycles = 4
     boundaries = False
 
@@ -1016,6 +1019,7 @@ def get_weighted_parameter_distributions(log_name):
     nac_wmean, nac_wstd = weighted_avg_and_std(df['Nac'], weight)
     abort_wmean, abort_wstd = weighted_avg_and_std(df['Abort'], weight)
     escape_wmean, escape_wstd = weighted_avg_and_std(df['Escape'], weight)
+
     print(log_name)
     print('abort', abort_wmean, abort_wstd)
     print('nac', nac_wmean, nac_wstd)
@@ -1048,7 +1052,8 @@ def get_weighted_parameter_distributions(log_name):
 
     stats = {'NAC': (nac_wmean, nac_wstd),
              'Unscrunch': (abort_wmean, abort_wstd),
-             'Escape': (escape_wmean, escape_wstd)}
+             'Escape': (escape_wmean, escape_wstd),
+             'Top fit': df['Fit'].iloc(0)}
 
     return boundaries, stats
 
@@ -1115,6 +1120,7 @@ def plot_and_log_scrunch_comparison(plot, log_handle, model_scrunches, initial_R
     """
     Convenience function for running in parallel
     """
+
     experiment, extrapolated = get_experiment_scrunch_distribution()
     val, val_extrap = compare_scrunch_data(model_scrunches, experiment, extrapolated)
     entry = '{0}\t{1}\t{2}\t{3}\t{4}'.format(val, val_extrap, nac, abrt, escape)
@@ -1263,10 +1269,7 @@ def get_experiment_scrunch_distribution():
 
 def calc_scrunch_distribution(df, initial_RNAP):
     """
-    Will probably not get same distribution in time as Revyakin, but we might
-    get the same shape. They use a different salt to the other experiments,
-    and the concentration of that salt matters a lot for the result (see last
-    fig in supplementry of Revyakin).
+    Get distribution of time spent in abortive cycling before promoter escape
     """
 
     # when elongating gets +1 you have a promoter escape
@@ -1306,13 +1309,13 @@ def get_parameters(samples=10, GreB=True, boundaries=False):
 
     # Initial run
     if boundaries is False:
-        nac_low = 1
+        nac_low = 2
         nac_high = 25
 
-        abort_low = 1
+        abort_low = 2
         abort_high = 25
 
-        escape_low = 1
+        escape_low = 2
         escape_high = 25
     else:
         nac_low = boundaries['nac_low']
@@ -1346,12 +1349,13 @@ def ap_sensitivity_calc():
     ITSs = data_handler.ReadData('dg100-new')
     its_variant = [i for i in ITSs if i.name == variant_name][0]
     initial_RNAP = 100
-    sim_end = 1000
+    sim_end = 2000  # large number to ensure all simulations go until the end
     escape_RNA_length = 14
     #GreB = False
     GreB = True
 
-    samples_per_cycle = 200
+    samples_per_cycle = 300
+    #samples_per_cycle = 50
     cycles = 4
 
     plot = False
@@ -1360,12 +1364,13 @@ def ap_sensitivity_calc():
     multiproc = True
     #multiproc = False
 
-    ap_adjusts = range(-15, 16, 6)   # later for the 'full' show
+    ap_adjusts = range(-15, 16, 3)   # later for the 'full' show
     #ap_adjusts = range(-5, 6, 2)
-    #ap_adjusts = range(-5, 6, 10)
+    ap_adjusts = [0]
 
     # You need to save the optimal NAC and the tau obtained with the optimal
-    names = ['NAC', 'Escape', 'Unscrunch']
+    names = ['NAC', 'Escape', 'Unscrunch', 'Top fit']
+    rc_names = ['NAC', 'Escape', 'Unscrunch']
 
     # When unpacking you can rely on getting cycle-order
     ap_adjust_effect = OrderedDict()
@@ -1392,18 +1397,18 @@ def ap_sensitivity_calc():
 
         # Extract the final optimal values from the last simulation
         final_optimal = {n: optimal_values[cycles - 1][n] for n in names}
+        final_optimal_rcs = {n: optimal_values[cycles - 1][n] for n in rc_names}
 
         # Get half life of FL synthesis for -GreB N25
-        #tau = get_tau(1000, sim_end, final_optimal['NAC'], final_optimal['Unscrunch'],
-                      #final_optimal['Escape'])
-        tau = get_tau(1000, sim_end, **final_optimal)
+        tau = get_tau(300, sim_end, **final_optimal_rcs)
+        #tau = get_tau(500, sim_end, **final_optimal_rcs)
 
-        ap_adjust_effect[ap_adjustment] = {'NAC': final_optimal['NAC'], 'Tau': tau}
+        ap_adjust_effect[ap_adjustment] = final_optimal.copy()
+        ap_adjust_effect[ap_adjustment]['Tau'] = tau
 
-    #return
-    shelve_database = shelve.open(simulation_storage)
-    shelve_database['ap_adjust'] = ap_adjust_effect
-    shelve_database.close()
+    #shelve_database = shelve.open(simulation_storage)
+    #shelve_database['ap_adjust'] = ap_adjust_effect
+    #shelve_database.close()
 
 
 def get_tau(initial_RNAP, sim_end, NAC, Unscrunch, Escape):
@@ -1435,36 +1440,38 @@ def ap_sensitivity_plot():
     shelve_db = shelve.open(simulation_storage)
     ap_adjust_effect = shelve_db['ap_adjust']
     shelve_db.close()
-    ap_adjust_effect[0] = {'NAC': 10.4, 'Tau': 17.5}  # XXX get from global "correct" value?
+    # Include the effect of 0 perturbation
+    # XXX update these
+    defaults = {'NAC': 10.4, 'Tau': 17.5, 'Escape': 12.4, 'Unscrunch': 1.5}
+    ap_adjust_effect[0] = defaults
 
     # The indices from -x to + x now including 0
     adjusts = sorted(ap_adjust_effect.keys())
 
     data = {}
     data['NAC'] = [ap_adjust_effect[i]['NAC'] for i in adjusts]
-    #data['NAC_rel'] = [ap_adjust_effect[i]['NAC'] for i in adjusts]
-    data['Tau'] = [ap_adjust_effect[i]['Tau'] for i in adjusts]
+    data['Escape'] = [ap_adjust_effect[i]['Escape'] for i in adjusts]
+    data['Unscrunch'] = [ap_adjust_effect[i]['Unscrunch'] for i in adjusts]
 
     df = pd.DataFrame(data=data, index=adjusts)
-    # Normalize NAC rel relative to average (pos/neg supercoil) elongation speed from Revyakin: 11.65
-    #df['NAC_rel'] = df['NAC_rel'] / 11.65
+    df = df[['NAC', 'Escape', 'Unscrunch']]  # reorder in the order you want
 
-    f, axes = plt.subplots(2)
+    f, axes = plt.subplots(3)
 
     df.plot(kind='bar', ax=axes, subplots=True, sharex=True, rot=0,
             legend=False, label=False, title=None)
 
     axes[0].set_ylabel('NAC (1/s)')
-    #axes[1].set_ylabel('NAC relative to elongation')
-    axes[1].set_ylabel('$\\tau$ (s)')
-    axes[1].set_xlabel('Increase in AP at each ITS position (%)')
+    axes[1].set_ylabel('Escape (1/s)')
+    axes[2].set_ylabel('Unscrunch (1/s)')
+    axes[2].set_xlabel('Increase in AP at each ITS position (%)')
 
     # Pandas bug
     axes[0].set_title('')
     axes[1].set_title('')
-    #axes[2].set_title('')
+    axes[2].set_title('')
 
-    add_letters(axes, ['A', 'B'], ['UL'] * 2)
+    add_letters(axes, ['A', 'B', 'C'], ['UL'] * 3)
 
     f.savefig(os.path.join(fig_dir, 'ap_adjustment.pdf'))
 
@@ -1522,35 +1529,63 @@ def sensitivity_analysis():
     Result: this is looking good! But increase the range to perhaps 30% and
     increase the number of RNAPs to 5000 to reduce noise. Parallelize the
     beast, and then do a simple plot
+
+    This code was nice before multiprocessing. Storing and later matching
+    results values turned out to make a mess.
     """
 
     init_rcs = {'NAC': 10.5, 'Escape': 12.4, 'Unscrunch': 1.6}
 
-    init_rnap = 1000
+    init_rnap = 5000
 
-    perturbations = range(-10, 10, 1)
+    perturbations = range(-30, 30, 2)
+    #perturbations = range(-10, 10, 2)
     init_tau = get_tau(init_rnap, 1000, **init_rcs)
 
     shelve_database = shelve.open(simulation_storage)
 
-    # Perturbations from -10% to 10% in steps of 1.
-    effects = defaultdict(list)
+    p = Pool()
+    results = []
+    numbers = []
+
+    # Store all the numbers you need after multiprocessing is done
+    effects = defaultdict(dict)
     for rc_name, init_rc in init_rcs.items():
         for pb in perturbations:
             # Perturb the rate constant and insert it in a dictionary
-            pert_rc = init_rc * (1. + float(pb)/100.)
+            pert_rc = init_rc * (1. + float(pb) / 100.)
             pert_rcs = init_rcs.copy()
             pert_rcs[rc_name] = pert_rc
 
-            pert_tau = get_tau(init_rnap, 1000, **pert_rcs)
+            first_args = (init_rnap, 1000)
 
-            dtau = pert_tau / init_tau
+            # apply async accepts keyword arguments in third position
+            r = p.apply_async(get_tau, first_args, pert_rcs)
+            results.append(r)
             drc = pert_rc / init_rc
-            sensitivity = dtau / drc
 
-            effects[rc_name].append(sensitivity)
+            number_tuple = (rc_name, pb, drc)
+            numbers.append(number_tuple)
+    p.close()
+    p.join()
 
-    shelve_database['sensitivities'] = (effects, perturbations)
+    for r, number_tuple in zip(results, numbers):
+        pert_tau = r.get()
+        rc_name, pb, drc = number_tuple  # unpack
+
+        dtau = pert_tau / init_tau
+        sensitivity = dtau / drc
+
+        effects[rc_name][pb] = sensitivity
+
+    # Reconstructs the effects, in order
+    effects2 = defaultdict(list)
+    for rc_name, init_rc in init_rcs.items():
+        for pb in perturbations:
+
+            effects2[rc_name].append(effects[rc_name][pb])
+
+    shelve_database['sensitivities'] = (effects2, perturbations)
     shelve_database.close()
 
 
@@ -1594,7 +1629,7 @@ def main():
     # Fitting to Revyakin: +/-GreB, iteratively; save the w/mean
     # and w/std to make a line plot that shows the convergence of the
     # iterative scheme.
-    #revyakin_fit_calc()
+    revyakin_fit_calc()
     #revyakin_fit_plot()
 
     # Obtain the best parameters for N25 +Greb with extra percentages to AP.
@@ -1615,8 +1650,7 @@ def main():
 
     # Local sensitivity analysis
     #sensitivity_analysis()
-    plot_sensitivity_analysis()
-
+    #plot_sensitivity_analysis()
 
 if __name__ == '__main__':
     main()
