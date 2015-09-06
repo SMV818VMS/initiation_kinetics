@@ -18,6 +18,7 @@ import stochastic_model_run as smr
 import matplotlib.pyplot as plt
 from multiprocessing import Pool
 from collections import OrderedDict, defaultdict
+from itertools import product
 
 plt.ioff()
 
@@ -759,13 +760,38 @@ def fit_FL(x, y):
     def saturation(x, a, b, c):
         return a + b * (1 - np.exp(-c * x))
 
+    #def saturation2(x, a, b, c):
+        ##return a + b * (1 - np.exp(-c * x))
+        #return a + b * (1 - p(-c * x))
+
     popt, pcov = curve_fit(saturation, x, y)
+    #popt2, pcov2 = curve_fit(saturation2, x, y)
 
     # Make some preductions from this simple model
     xx = np.linspace(x.min(), x.max(), 1000)
     yy = saturation(xx, *popt)
+    #yy2 = saturation2(xx, *popt2)
+
+    # Compare fits?
+
+    #debug()
 
     return xx, yy
+
+
+def thalf_vo_2003(method=1):
+
+    # FL kinetics for 1 and 2.
+    df = get_2003_FL_kinetics(method=1)
+
+    # Fit 2003 data and calculate half life
+    xnew, ynew = fit_FL(df.index, df.values)
+
+    # Get the halflife of full length product
+    f_vo = interpolate(ynew, xnew, k=1)
+    thalf_vo = float(f_vo(0.5))
+
+    return thalf_vo
 
 
 def simple_vo_2003_comparison():
@@ -837,7 +863,7 @@ def simple_vo_2003_comparison():
     f1.savefig('GreB_plus_and_GreB_minus_kinetics.pdf')
 
 
-def revyakin_fit_plot():
+def revyakin_fit_plot(GreB=True, fit_extrap=False):
     """
     Plot data from fit to Revyakin data
     """
@@ -845,7 +871,7 @@ def revyakin_fit_plot():
     # A bit lame: database with one entry
     # But it allows you to tweak the plot long after running the simulation
     shelve_database = shelve.open(simulation_storage)
-    params_per_cycle = shelve_database['params']
+    params_per_cycle = shelve_database['params_{0}_{1}'.format(GreB, fit_extrap)]
     shelve_database.close()
 
     NAC_mean = [value['NAC'][0] for value in params_per_cycle.values()]
@@ -882,7 +908,7 @@ def revyakin_fit_plot():
     add_letters(axes, ['A', 'B', 'C'], ['UL'] * 3)
 
     #set_fig_size(f, current_journal_width, 8)
-    f.savefig(os.path.join(fig_dir, 'parameter_estimation_cycles.pdf'))
+    f.savefig(os.path.join(fig_dir, 'parameter_estimation_cycles_GreB_{0}_{1}.pdf'.format(GreB, fit_extrap)))
 
     # Print to screen
     print("Mean")
@@ -891,12 +917,13 @@ def revyakin_fit_plot():
     print(pd.DataFrame(data=dict_err, index=df_mean.index))
 
     # Also print Tau from Vo to have it at hand
+    # That's not Vo!
     tau = get_tau(1000, 2000, NAC_mean[-1], unscrunch_mean[-1], escape_mean[-1])
     print('Tau from Vo et al')
     print(tau)
 
 
-def revyakin_fit_calc():
+def revyakin_fit_calc(GreB=True, fit_extrap=False):
     """
     Interesting. Even if you run with just 50 samples, you still get
     convergence to small values. So to make it fair you'd need to iterate 100,
@@ -906,20 +933,44 @@ def revyakin_fit_calc():
     important to start with a very high number. Subsequent steps mostly reduce
     uncertainty.
 
-    XXX the simulations no longer converge to the same value. You have changed
-    something. Whatisit?
+    The escape parameter is insensitive; remove it and you can simulate a lot
+    faster, covering more ground. If you first do a stochastic search that
+    allowes you to narrow down NAC and abort, and at the same time set escape
+    to be constant. Then you can do an exhaustive grid search for NAC and
+    abort; 5k simulations gives you a grid of 70 values for each variable. If
+    NAC is between 5 and 15.
+
+    Or save yourself some hassle and do the following: assume that NAC is no
+    faster than during elongation; measured at 14 for one supercoil
+    configuration; you set the number at 15. Set lowest number at 2. Use the
+    same for abort. For escape, set a value between 2 and 20.
+
+    But then you run into problems repeating the method for -GreB :)
+    Stick to the approach then. Cause it needs to work for more than just the
+    optimal case.
+
+    Better for methods: a two-step approach. First sample uniformly from 1 to
+    25 10k times. Look at the top 5% of this run; that's 500 samples, so it
+    should look good in a histogram plot with 30 bars. Choose the 95pct
+    percentiles for NAC and Abort values in the top 5% of results as new
+    boundaries and the average Escape value. Then do an exhaustive 10000k
+    (depending on range; down to 0.1 resolution) gridded search in this new
+    range to find optimal values. You better save this simulation till the end
+    of time. Show a pcolor mesh plots.
+
+    You should save the values from all runs for making pcolormeshplots.
     """
     # Setup
     variant_name = 'N25'
     ITSs = data_handler.ReadData('dg100-new')
     its_variant = [i for i in ITSs if i.name == variant_name][0]
     initial_RNAP = 100
-    sim_end = 1000
+    sim_end = 5000
     escape_RNA_length = 14
-    #GreB = False
-    GreB = True
 
-    samples_per_cycle = 400
+    samples_per_cycle = 1000
+    #samples_per_cycle = 200
+
     cycles = 4
     boundaries = False
 
@@ -929,28 +980,34 @@ def revyakin_fit_calc():
     multiproc = True
     #multiproc = False
 
+    escape_constant = True
+
     # When unpacking you can rely on getting cycle-order
     params_per_cycle = OrderedDict()
     shelve_database = shelve.open(simulation_storage)
     for cycle in range(cycles):
 
-        log_name = '{0}-RNAP_{1}-samples_{2}-GreB_scrunch_cycle_{3}'.format(initial_RNAP,
-                                                                            samples_per_cycle,
-                                                                            GreB, cycle)
+        log_name = '{0}-RNAP_{1}-samples_{2}-GreB_scrunch_cycle_{3}_fit_extrap'.format(initial_RNAP,
+                                                                                       samples_per_cycle,
+                                                                                       GreB,
+                                                                                       cycle,
+                                                                                       fit_extrap)
 
         params = get_parameters(samples=samples_per_cycle, GreB=GreB,
-                                boundaries=boundaries)
+                                boundaries=boundaries,
+                                escape_constant=escape_constant,
+                                method='stepwise')
+
         stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
 
         search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
-                               initial_RNAP, sim_end, params, plot, log_name,
-                               False)
+                               initial_RNAP, sim_end, params, plot, log_name, False)
 
-        boundaries, stats = get_weighted_parameter_distributions(log_name)
+        new_boundaries, stats = get_weighted_parameter_distributions(log_name, fit_extrap)
 
         params_per_cycle[cycle] = stats
 
-    shelve_database['params'] = params_per_cycle
+    shelve_database['params_{0}_{1}'.format(GreB, fit_extrap)] = params_per_cycle
     shelve_database.close()
 
 
@@ -970,7 +1027,7 @@ def add_letters(axes, letters, positions, shiftX=0, shiftY=0):
                 fontweight='bold', va='top')
 
 
-def get_weighted_parameter_distributions(log_name):
+def get_weighted_parameter_distributions(log_name, fit_extrap=False):
 
     # Use the top 20 results to decide on new parameter values
     top = 20
@@ -979,29 +1036,32 @@ def get_weighted_parameter_distributions(log_name):
     fitness_log_file = os.path.join(log_dir, log_name + '.log')
     df = pd.read_csv(fitness_log_file, sep='\t', header=0)
 
-    df.sort('Fit', inplace=True)
+    if fit_extrap:
+        fit = 'Fit_extrap'
+    else:
+        fit = 'Fit'
+
+    df.sort(fit, inplace=True)
     # write back the sorted df
     df.to_csv(fitness_log_file, sep='\t')
 
     df = df[:top]
     # But drop any rows with NaN values in the Fit column
-    df = df.dropna(subset=['Fit'])
+    df = df.dropna(subset=[fit])
 
     nac = df['Nac']
     ab = df['Abort']
     es = df['Escape']
 
-    weight = 1. / (df['Fit'] / df['Fit'].min())
+    weight = 1. / (df[fit] / df[fit].min())
 
-    #step = 0.01
-
-    f, axes = plt.subplots(3)
-    #dff = pd.DataFrame(data=np.asarray(nac), index=np.asarray(weight))
     data = {'nac': np.asarray(nac), 'abortive': np.asarray(ab), 'Escape': np.asarray(es)}
     dff = pd.DataFrame(data=data, index=np.asarray(weight))
     dff = dff.sort_index()
     new_index = np.linspace(dff.index.min(), dff.index.max(), 200)
     dff = dff.reindex(new_index, method='nearest')
+
+    f, axes = plt.subplots(3)
     dff.plot(kind='hist', ax=axes, use_index=True, bins=10, legend=False,
              normed=True, subplots=True)
 
@@ -1220,13 +1280,13 @@ def compare_scrunch_data(model, experiment, experiment_extrap):
     # Get the values in the model closest to those in the experiment using
     # linear interpolation
     compare = pd.concat([model, experiment]).sort_index().\
-              interpolate(method='index').reindex(experiment.index)
+        interpolate(method='index').reindex(experiment.index)
 
     diff = np.abs(compare['inverse_cumul_experiment'] - compare['inverse_cumul_model'])
     distance = np.linalg.norm(diff)
 
     c_extr = pd.concat([model, experiment_extrap]).sort_index().\
-              interpolate(method='index').reindex(experiment_extrap.index)
+        interpolate(method='index').reindex(experiment_extrap.index)
 
     # Ignore stuff before 0.5 seconds, it's hard to go that fast,
     # so there will always be nans in the beginning
@@ -1300,10 +1360,13 @@ def get_sim_name(stoi_setup, its_name):
     return sim_name
 
 
-def get_parameters(samples=10, GreB=True, boundaries=False):
+def get_parameters(samples=10, GreB=True, boundaries=False, method='uniform',
+                   escape_constant=False):
     """
     For Revyakin data you got a similar result for stepwise and uniform
-    parameter sampling
+    parameter sampling.
+
+    Method can be uniform or stepwise.
     """
     from numpy.random import uniform
 
@@ -1312,7 +1375,7 @@ def get_parameters(samples=10, GreB=True, boundaries=False):
         nac_low = 2
         nac_high = 25
 
-        abort_low = 2
+        abort_low = 1
         abort_high = 25
 
         escape_low = 2
@@ -1328,14 +1391,42 @@ def get_parameters(samples=10, GreB=True, boundaries=False):
         escape_high = boundaries['escape_high']
 
     params = []
-    for sample_nr in range(samples):
-        nac = uniform(nac_low, nac_high)
-        abortive = uniform(abort_low, abort_high)
-        escape = uniform(escape_low, escape_high)
 
-        params.append((nac, abortive, escape))
+    if method == 'uniform':
+        for sample_nr in range(samples):
+            nac = uniform(nac_low, nac_high)
+            abortive = uniform(abort_low, abort_high)
+            escape = uniform(escape_low, escape_high)
+
+            params.append((nac, abortive, escape))
+
+    elif method == 'stepwise':
+        if escape_constant:
+            nr_steps = samples / 3.
+        else:
+            nr_steps = samples / 2.
+
+        nac = np.linspace(nac_low, nac_high, nr_steps)
+        abortive = np.linspace(abort_low, abort_high, nr_steps)
+
+        if escape_constant:
+            esc = 12
+            # Do some trickery to get the escape rate in there alongside
+            params = [list(_) for _ in product(nac, abortive)]
+            params = [_.append(esc) for _ in params]
+        else:
+            escape = np.linspace(escape_low, escape_high, nr_steps)
+            params = list(product(nac, abortive, escape))
 
     return params
+
+
+def get_variant(name):
+
+    ITSs = data_handler.ReadData('dg100-new')
+    its_variant = [i for i in ITSs if i.name == name][0]
+
+    return its_variant
 
 
 def ap_sensitivity_calc():
@@ -1346,27 +1437,22 @@ def ap_sensitivity_calc():
     """
     # Setup
     variant_name = 'N25'
-    ITSs = data_handler.ReadData('dg100-new')
-    its_variant = [i for i in ITSs if i.name == variant_name][0]
+    its_variant = get_variant(variant_name)
     initial_RNAP = 100
-    sim_end = 2000  # large number to ensure all simulations go until the end
+    sim_end = 200000  # large number to ensure all simulations go until the end
     escape_RNA_length = 14
-    #GreB = False
     GreB = True
 
-    samples_per_cycle = 300
-    #samples_per_cycle = 50
-    cycles = 4
+    samples_per_cycle = 1000
+    #cycles = 4
+    cycles = 1
 
     plot = False
-    #plot = True
-
     multiproc = True
-    #multiproc = False
 
     ap_adjusts = range(-15, 16, 3)   # later for the 'full' show
-    #ap_adjusts = range(-5, 6, 2)
-    ap_adjusts = [0]
+    ap_adjusts.append(0)  # get the base case as well
+    ap_adjusts.sort()
 
     # You need to save the optimal NAC and the tau obtained with the optimal
     names = ['NAC', 'Escape', 'Unscrunch', 'Top fit']
@@ -1378,6 +1464,10 @@ def ap_sensitivity_calc():
         optimal_values = OrderedDict()
         boundaries = False  # Important! Start off with fresh boundaries before each cycle
         for cycle in range(cycles):
+
+            # Can this have an effect? It shouldn't :S
+            if ap_adjustment == 0:
+                ap_adjustment = False
 
             log_str = '{0}-RNAP_{1}-samples_{2}-GreB_scrunch_cycle_{3}_ap_adjust{4}'
             log_name = log_str.format(initial_RNAP, samples_per_cycle, GreB,
@@ -1400,15 +1490,14 @@ def ap_sensitivity_calc():
         final_optimal_rcs = {n: optimal_values[cycles - 1][n] for n in rc_names}
 
         # Get half life of FL synthesis for -GreB N25
-        tau = get_tau(300, sim_end, **final_optimal_rcs)
-        #tau = get_tau(500, sim_end, **final_optimal_rcs)
+        tau = get_tau(5000, sim_end, **final_optimal_rcs)
 
         ap_adjust_effect[ap_adjustment] = final_optimal.copy()
         ap_adjust_effect[ap_adjustment]['Tau'] = tau
 
-    #shelve_database = shelve.open(simulation_storage)
-    #shelve_database['ap_adjust'] = ap_adjust_effect
-    #shelve_database.close()
+    shelve_database = shelve.open(simulation_storage)
+    shelve_database['ap_adjust'] = ap_adjust_effect
+    shelve_database.close()
 
 
 def get_tau(initial_RNAP, sim_end, NAC, Unscrunch, Escape):
@@ -1435,44 +1524,162 @@ def get_tau(initial_RNAP, sim_end, NAC, Unscrunch, Escape):
     return thalf_grebminus
 
 
+def get_ap_adjusted_tau(data, init_rnap):
+    """
+    Just a not about zip. Zip works like this: zip([1,2,3], [4,5,6]) is an
+    iterator that yields (1,4), (2,5), (3,6).
+    """
+
+    shelve_db = shelve.open(simulation_storage)
+    sim_end = 9000
+    p = Pool()
+    results = []
+    for nac, top_fit, unscrunch, escape in zip(*data.values()):
+        args = (init_rnap, sim_end, nac, unscrunch, escape)
+        res = p.apply_async(get_tau, args)
+        results.append(res)
+    p.close()
+    p.join()
+
+    taus = [r.get() for r in results]
+
+    shelve_db['ap_adjusted_tau_{0}'.format(init_rnap)] = taus
+    shelve_db.close()
+
+    return taus
+
+
+def aps_adjusted_plot(adjusts):
+    """
+    Show the AP distribution for -15 ... + 15 at all positions.
+
+    Unfortunately the GreB+ APs are only available for a single experiment. By
+    contranst, GreB- has multiple replicas. The GreB+ AP for +2 is 60%, while
+    it's only 32% for GreB-. In theory, they should be the same. It's
+    tempting to set the APs for +2 to +5 equal between GreB+ and GreB-. But
+    then you'd get a slower NAC, and a worse fit with Vo 2003.
+    """
+
+    its_variant = get_variant('N25')
+
+    baseline_aps = its_variant.abortive_prob_GreB
+
+    positives = [baseline_aps]
+    negatives = [baseline_aps]
+
+    # Adjusted APs are symmetrical, so go through the postive ones
+    false_i = adjusts.index(False)
+    abs_adjusts = adjusts[false_i + 1:]
+
+    for adj in abs_adjusts:
+
+        pos_aps = baseline_aps + adj / 100.
+        pos_aps[pos_aps > 1] = 1  # in case adjustment leads to aps > 1
+
+        neg_aps = baseline_aps - adj / 100.
+        neg_aps[neg_aps < 0] = 0  # in case adjustment leads to aps < 0
+
+        positives.append(pos_aps)
+        negatives.append(neg_aps)
+
+    positions = range(2, len(baseline_aps) + 2)
+    pos_col_names = ['Baseline'] + ['+' + str(a) + '%' for a in abs_adjusts]
+    pos_data = {n: v for n, v in zip(pos_col_names, positives)}
+    pos_df = pd.DataFrame(data=pos_data, index=positions)
+    pos_df = pos_df[pos_col_names]
+
+    neg_col_names = ['Baseline'] + ['-' + str(a) + '%' for a in abs_adjusts]
+    neg_data = {n: v for n, v in zip(neg_col_names, negatives)}
+    neg_df = pd.DataFrame(data=neg_data, index=positions)
+    neg_df = neg_df[neg_col_names]
+
+    # How do you arrange the sublots the way you want them? You could make two
+    # dataframes, and arrange the columns from baseline to most extrme case.
+    # Then plot, but pass tot axes the two columns you made with subplots.
+
+    f, axes = plt.subplots(6, 2)
+
+    # restrict to +11 and get %
+    pos_df = pos_df[:10] * 100
+    neg_df = neg_df[:10] * 100
+    ylim = (0, 80)
+    yticks = [0, 40, 80]
+
+    pos_df.plot(kind='bar', ax=axes[:, 0], subplots=True, sharex=True, rot=0,
+                legend=False, label=False, title=None, fontsize=7, width=0.3,
+                color='k', ylim=ylim, yticks=yticks)
+
+    # Try to mask negative values
+    neg_df.mask(neg_df == 0, inplace=True)
+    neg_df.plot(kind='bar', ax=axes[:, 1], subplots=True, sharex=True, rot=0,
+                legend=False, label=False, title=None, fontsize=7, width=0.3,
+                color='k', ylim=ylim, yticks=yticks)
+
+    f.set_size_inches(6, 8)
+    f.tight_layout()
+    f.savefig(os.path.join(fig_dir, 'aps_after_adjustment.pdf'))
+
+    1/0
+
+
 def ap_sensitivity_plot():
 
     shelve_db = shelve.open(simulation_storage)
     ap_adjust_effect = shelve_db['ap_adjust']
     shelve_db.close()
-    # Include the effect of 0 perturbation
-    # XXX update these
-    defaults = {'NAC': 10.4, 'Tau': 17.5, 'Escape': 12.4, 'Unscrunch': 1.5}
-    ap_adjust_effect[0] = defaults
 
     # The indices from -x to + x now including 0
     adjusts = sorted(ap_adjust_effect.keys())
+
+    # Make a plot that shows the effect of these adjusts on the AP
+    # distribution
+    aps_adjusted_plot(adjusts)
 
     data = {}
     data['NAC'] = [ap_adjust_effect[i]['NAC'] for i in adjusts]
     data['Escape'] = [ap_adjust_effect[i]['Escape'] for i in adjusts]
     data['Unscrunch'] = [ap_adjust_effect[i]['Unscrunch'] for i in adjusts]
+    data['Top fit'] = [ap_adjust_effect[i]['Top fit'] for i in adjusts]
+    data['Tau'] = [ap_adjust_effect[i]['Tau'] for i in adjusts]
 
+    # Get tau value from vo et. al
+    tau_vo = thalf_vo_2003(method=1)
+
+    # Replace False with 0
+    adjusts[adjusts.index(False)] = 0
     df = pd.DataFrame(data=data, index=adjusts)
-    df = df[['NAC', 'Escape', 'Unscrunch']]  # reorder in the order you want
+    #df = df[['NAC', 'Escape', 'Unscrunch', 'Top fit', 'Tau']]  # reorder in the order you want
+    df = df[['Top fit', 'NAC', 'Unscrunch', 'Escape', 'Tau']]  # reorder in the order you want
 
-    f, axes = plt.subplots(3)
+    # Normalize to experimentally obtained
+    df['Tau'] = df['Tau'] / tau_vo
+
+    nr_subplots = 5
+    f, axes = plt.subplots(nr_subplots, figsize=(4, 8))
 
     df.plot(kind='bar', ax=axes, subplots=True, sharex=True, rot=0,
-            legend=False, label=False, title=None)
+            legend=False, label=False, title=None, fontsize=7, width=0.3,
+            color='k')
 
-    axes[0].set_ylabel('NAC (1/s)')
-    axes[1].set_ylabel('Escape (1/s)')
-    axes[2].set_ylabel('Unscrunch (1/s)')
-    axes[2].set_xlabel('Increase in AP at each ITS position (%)')
+    font_size = 9
 
-    # Pandas bug
-    axes[0].set_title('')
-    axes[1].set_title('')
-    axes[2].set_title('')
+    axes[0].set_ylabel(r'Fit (RMSD)', fontsize=font_size)
+    axes[1].set_ylabel(r'NAC ($s^{-1}$)', fontsize=font_size)
+    axes[2].set_ylabel(r'Unscrunch ($s^{-1}$)', fontsize=font_size)
+    axes[3].set_ylabel(r'Escape ($s^{-1}$)', fontsize=font_size)
+    axes[4].set_ylabel(r'$\tau_r$', fontsize=font_size)
+    axes[4].set_xlabel('Increase in AP at each ITS position (%)', fontsize=font_size)
 
-    add_letters(axes, ['A', 'B', 'C'], ['UL'] * 3)
+    # Pandas bug; have to remove title
+    for i in range(nr_subplots):
+        axes[i].set_title('')
 
+    # Add A, B, C... etc to the plot
+    import string
+    letters = list(string.uppercase)[:nr_subplots]
+    add_letters(axes, letters, ['UL'] * nr_subplots, shiftY=0.15, shiftX=-0.14)
+
+    f.tight_layout()
     f.savefig(os.path.join(fig_dir, 'ap_adjustment.pdf'))
 
 
@@ -1629,18 +1836,17 @@ def main():
     # Fitting to Revyakin: +/-GreB, iteratively; save the w/mean
     # and w/std to make a line plot that shows the convergence of the
     # iterative scheme.
-    revyakin_fit_calc()
-    #revyakin_fit_plot()
+    #GreBs = [True, False]
+    #GreBs = [False]
+    #GreBs = [True]
+    #for GreB in GreBs:
+        #revyakin_fit_calc(GreB, fit_extrap=True)
+        #revyakin_fit_plot(GreB, fit_extrap=True)
 
+    revyakin_fit_calc(GreB=True)
     # Obtain the best parameters for N25 +Greb with extra percentages to AP.
-    # +/- 1 to +/- 10 for example. Plot NAC and Tau (Vo).
     #ap_sensitivity_calc()
     #ap_sensitivity_plot()
-    # would it be helpful to show a bar plot of the modified abortive
-    # probabilities? Yes, and for Tau some kinetic plots as well just to drive
-    # the point in. But for the nonce it will do. Now, you need to write :)
-    # Actually, people will want to see the fit as well. With some mini-plots
-    # I'm sure you can do it. Invent a measure: 1-std
 
     #tau_variation_plot()
     #fraction_scrunches_less_than_1_second_calc()
@@ -1651,6 +1857,7 @@ def main():
     # Local sensitivity analysis
     #sensitivity_analysis()
     #plot_sensitivity_analysis()
+
 
 if __name__ == '__main__':
     main()
