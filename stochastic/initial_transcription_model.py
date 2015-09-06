@@ -39,7 +39,7 @@ class ITSimulationSetup(object):
 
         # Extract values from the graph
         reactions, initial_values, parameters = \
-        ktm.GenerateStochasticInput(sim_graph, self.nr_prod_RNAP, self.nr_unprod_RNAP)
+            ktm.GenerateStochasticInput(sim_graph, self.nr_prod_RNAP, self.nr_unprod_RNAP)
 
         # Write the model input psc file
         psc_path = ktm.write_psc(reactions, initial_values, parameters, name, psc_dir)
@@ -85,12 +85,22 @@ class ITModel(object):
         setup_serialized = pickle.dumps(setupcopy)
         return hashlib.md5(setup_serialized).hexdigest()
 
+    def _clean_up(self):
+        """
+        Remove psc file with input data.
+        """
+
+        os.remove(self.psc_file)
+
     def run(self, *args, **kwargs):
         """
         Run and pass on any parameters to the timeseries calculation method
         """
 
         sim = self._runStochPy(self.nr_traj, self.duration, self.psc_file)
+
+        # clean up: remove temporary file
+        self._clean_up()
 
         return self._calc_timeseries(sim, *args, **kwargs)
 
@@ -143,7 +153,7 @@ class ITModel(object):
                 data[species] = np.zeros(len(time), dtype=np.int16)
             else:
                 print('What?')
-                1/0
+                1 / 0
 
         df = pd.DataFrame(data=data, index=time)
 
@@ -182,10 +192,10 @@ class ITModel(object):
                     species_simulated = True
                     sp_index = model_names.index(model_name)
                     # Find -change in #species each timestep (+1=aborted RNA, -1=backtracked)
-                    change = all_ts[:-1,sp_index] - all_ts[1:,sp_index]
+                    change = all_ts[:-1, sp_index] - all_ts[1:, sp_index]
                     # Set to zero those values that represent entry into the
                     # backstepped state
-                    change[change==-1] = 0
+                    change[change == -1] = 0
                     # Get timeseries of # abortive RNA
                     cumul = np.cumsum(change)
                     # We lose the first timestep. It's anyway impossive to produce an
@@ -206,7 +216,7 @@ class ITModel(object):
         """
 
         organizer = {}
-        for nt in range(2,21):
+        for nt in range(2, 21):
             key = 'rna_{0}'.format(nt)
             if nt < 10:
                 species = ['RNAP{0}_b'.format(nt), 'RNAP{0}_f'.format(nt)]
@@ -221,5 +231,3 @@ class ITModel(object):
         organizer['FL'] = ['RNAPflt']
 
         return organizer
-
-
