@@ -16,13 +16,18 @@ from metrics import weighted_avg_and_std
 import data_handler
 import stochastic_model_run as smr
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.style.use('ggplot')
 from multiprocessing import Pool
 from collections import OrderedDict, defaultdict
 from itertools import product
+from pandas.tools.plotting import scatter_matrix
 
-plt.ioff()
+#plt.ioff()
+#plt.ioff()
+plt.ion()
 
-import seaborn as sns
+#import seaborn as sns
 from ipdb import set_trace as debug  # NOQA
 from scipy.interpolate import InterpolatedUnivariateSpline as interpolate
 from scipy.optimize import curve_fit
@@ -38,7 +43,7 @@ scrunch_db = os.path.join(log_dir, 'scrunch_fit_df_storage')
 simulation_storage = os.path.join(here, 'storage', 'shelve_storage_sim')
 
 # Global setting for max processors
-max_proc = 4
+max_proc = 3
 
 # Figure sizes in centimeter. Height is something you might set maually but
 # width should always be the maximum
@@ -520,6 +525,7 @@ def box_plot_model_exp(data, data_range, title):
     separator = 'kind'
     df_long = pd.melt(mydf_t, separator, var_name=varname, value_name=valname)
     f, ax = plt.subplots()
+    import seaborn as sns
     sns.factorplot(varname, hue=separator, y=valname, data=df_long,
                    kind="box", ax=ax, sym='')  # sym='' to get rid of outliers
 
@@ -923,7 +929,308 @@ def revyakin_fit_plot(GreB=True, fit_extrap=False):
     print(tau)
 
 
-def revyakin_fit_calc(GreB=True, fit_extrap=False):
+def revyakin_fit_calc_two_step(GreB=True, fit_extrap=False):
+    """
+    Better for methods: a two-step approach. First sample uniformly from 1 to
+    25 10k times. Look at the top 5% of this run; that's 500 samples, so it
+    should look good in a histogram plot with 30 bars. Choose the 95pct
+    percentiles for NAC and Abort values in the top 5% of results as new
+    boundaries and the average Escape value. Then do an exhaustive 10000k
+    (depending on range; down to 0.1 resolution) gridded search in this new
+    range to find optimal values. You better save this simulation till the end
+    of time. Show a pcolor mesh plots.
+
+    Finally, choose the average of the 5% best results in the last run as your
+    official values.
+
+    You should save the values from all runs for making pcolormeshplots.
+    """
+    # Setup
+    variant_name = 'N25'
+    ITSs = data_handler.ReadData('dg100-new')
+    its_variant = [i for i in ITSs if i.name == variant_name][0]
+    initial_RNAP = 100
+    sim_end = 9000
+    escape_RNA_length = 14
+
+    samples_round_1 = 50000
+    samples_round_2 = 50000
+
+    #samples_round_1 = 5000
+    #samples_round_2 = 5000
+
+    boundaries = False
+
+    plot = False
+    #plot = True
+
+    multiproc = True
+    #multiproc = False
+
+    # -----------------------------------------------------------------------------------------
+    # Round 1
+    #
+    shelve_database = shelve.open(simulation_storage)
+
+    log_name = 'RNAP-{0}_samples-{1}_GreB-{2}_round-{3}_fitextrap-{4}'.format(initial_RNAP,
+                                                                              samples_round_1,
+                                                                              GreB,
+                                                                              1, fit_extrap)
+    params = get_parameters(samples=samples_round_1, GreB=GreB,
+                            boundaries=boundaries,
+                            method='uniform')
+    stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
+    search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
+                           initial_RNAP, sim_end, params, plot, log_name, False)
+    new_boundaries, stats = get_new_boundaries(log_name, fit_extrap, samples_round_1)
+
+    dbstr = 'new_boundaries_first_round_GreB-{0}_fitextrap-{1}_samples-{2}'.format(GreB,
+                                                                                   fit_extrap,
+                                                                                   samples_round_1)
+    shelve_database[dbstr] = new_boundaries
+    # -----------------------------------------------------------------------------------------
+
+    # -----------------------------------------------------------------------------------------
+    # Round 2
+    #
+    log_name = 'RNAP-{0}_samples-{1}_GreB-{2}_round-{3}_fitextrap-{4}'.format(initial_RNAP,
+                                                                              samples_round_2,
+                                                                              GreB,
+                                                                              2, fit_extrap)
+    params = get_parameters(samples=samples_round_2, GreB=GreB,
+                            boundaries=new_boundaries,
+                            method='stepwise', escape_constant=True)
+    stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
+    search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
+                           initial_RNAP, sim_end, params, plot, log_name, False)
+
+    final_boundaries, final_stats = get_new_boundaries(log_name, fit_extrap, samples_round_2)
+
+    dbstr = 'final_boundaries_GreB-{0}_fitextrap-{1}_samples-{2}'.format(GreB,
+                                                                         fit_extrap,
+                                                                         samples_round_2)
+    shelve_database[dbstr] = final_boundaries
+    # Plot heatmaps of the final grid of nac and abortive
+    plot_heatmaps(log_name)
+    print(final_stats)
+    dbstr_values = 'params-final_GreB-{0}_fit_extrap-{1}_samples1-{2}_samples2-{3}'.format(GreB,
+                                                                                           fit_extrap,
+                                                                                           samples_round_1,
+                                                                                           samples_round_2)
+    shelve_database[dbstr_values] = final_stats
+    # -----------------------------------------------------------------------------------------
+
+    shelve_database.close()
+
+
+def heatmap(df, fit_name='Fit', ax=False, max_value=False):
+    """
+    Plot heatmap of Nac and Abort from a dataframe
+    """
+
+    x = df['Nac']
+    y = df['Abort']
+    z = df[fit_name]
+
+    # For filling the Z matrix with values from x and y (thanks unutbu)
+    x_range, x_idx = np.unique(x, return_inverse=True)
+    y_range, y_idx = np.unique(y, return_inverse=True)
+
+    X, Y = np.meshgrid(x_range, y_range)
+    Z = np.zeros((x_idx.max() + 1, y_idx.max() + 1))
+    Z[x_idx, y_idx] = z
+
+    # If max value specified, mask higher values
+    if max_value is False:
+        pass
+    else:
+        Z = np.ma.masked_where(Z > max_value, Z)
+
+    return_fig = False
+    if ax is False:
+        f, ax = plt.subplots()
+        return_fig = True
+
+    # Absurd way of specifiying a color bar to a plot
+    # And why the transpose?
+    whatever_matplotlib = ax.pcolormesh(X, Y, Z.T, cmap=matplotlib.cm.rainbow_r)
+    plt.colorbar(whatever_matplotlib, ax=ax)
+
+    ax.set_xlabel('NAC 1/s')
+    ax.set_ylabel('Unscrunch 1/s')
+
+    if return_fig:
+        return f, ax
+
+
+def plot_heatmaps(log_name):
+    """
+    Plot a heat map of NAC vs abortive and unscrunch.
+    """
+
+    fitness_log_file = os.path.join(log_dir, log_name + '.log')
+    df = pd.read_csv(fitness_log_file, sep='\t', header=0)
+
+    params = get_log_params(log_name)
+    if params['fitextrap']:
+        fit = 'Fit_extrap'
+    else:
+        fit = 'Fit'
+
+    f, ax = heatmap(df, fit_name=fit)
+
+    file_path = os.path.join(fig_dir, 'nac_vs_unscrunch_final_grid.pdf')
+    f.savefig(file_path, format='pdf')
+    plt.close(f)
+
+    #fig = plt.figure()
+    #from mpl_toolkits.mplot3d import Axes3D  # NOQA
+    #ax = fig.gca(projection='3d')
+    #whatev = ax.plot_surface(X, Y, Z, cmap=matplotlib.cm.rainbow_r)
+    #plt.colorbar(whatev)
+    #file_path = os.path.join(fig_dir, 'nac_vs_unscrunch_final_grid_3d.pdf')
+    #fig.savefig(file_path, format='pdf')
+    #plt.close()
+
+
+def get_new_boundaries(log_name, fit_extrap, nr_samples):
+    """
+    Look at top 5% (or 1%) of simulation. Choose 95pct interval of top 5%.
+    """
+
+    fitness_log_file = os.path.join(log_dir, log_name + '.log')
+    df = pd.read_csv(fitness_log_file, sep='\t', header=0)
+
+    # Determines which value we optimize for
+    if fit_extrap:
+        fit = 'Fit_extrap'
+    else:
+        fit = 'Fit'
+
+    df.sort(fit, inplace=True)
+
+    plot_parameter_scatter_matrix(log_name)
+
+    # Get values from top1
+    top_5pct_idx = int(nr_samples * 0.01)
+    df = df[:top_5pct_idx]
+
+    # But drop any rows with NaN values in the Fit column
+    df = df.dropna(subset=[fit])
+
+    # Extract the weighted mean +/- 1 std for Nac and Abort
+    weight = 1. / (df[fit] / df[fit].min())
+    # Print weighted mean and std of Nac and abort
+    nac_wmean, nac_wstd = weighted_avg_and_std(df['Nac'], weight)
+    abort_wmean, abort_wstd = weighted_avg_and_std(df['Abort'], weight)
+    escape_wmean, escape_wstd = weighted_avg_and_std(df['Escape'], weight)
+
+    # Create new boundaries for new parameter sampling
+    nac_low = nac_wmean - nac_wstd
+    nac_high = nac_wmean + nac_wstd
+
+    abort_low = abort_wmean - abort_wstd
+    abort_high = abort_wmean + abort_wstd
+
+    escape_low = escape_wmean - escape_wstd
+    escape_high = escape_wmean + escape_wstd
+
+    boundaries = {
+        'nac_low': max(nac_low, 0),
+        'nac_high': nac_high,
+
+        'abort_low': max(abort_low, 0),
+        'abort_high': abort_high,
+
+        'escape_low': max(escape_low, 0),
+        'escape_high': escape_high,
+    }
+
+    stats = {'NAC': (nac_wmean, nac_wstd),
+             'Unscrunch': (abort_wmean, abort_wstd),
+             'Escape': (escape_wmean, escape_wstd),
+             'Top fit': df['Fit'].iloc(0)}
+
+    return boundaries, stats
+
+
+def bool_or_float(v):
+    if v == 'False':
+        return False
+    elif v == 'True':
+        return True
+    else:
+        return float(v)
+
+
+def get_log_params(log_name):
+    log_split1 = log_name.split('_')
+
+    params = {}
+    for tt in log_split1:
+        k, v = tt.split('-')
+        params[k] = bool_or_float(v)
+
+    return params
+
+
+def plot_parameter_scatter_matrix(log_name):
+
+    fitness_log_file = os.path.join(log_dir, log_name + '.log')
+    df = pd.read_csv(fitness_log_file, sep='\t', header=0)
+
+    params = get_log_params(log_name)
+    if params['fitextrap']:
+        fit = 'Fit_extrap'
+    else:
+        fit = 'Fit'
+
+    df.sort(fit, inplace=True)
+
+    # First plot all values
+    subset_df = df[[fit, 'Nac', 'Abort', 'Escape']]
+    axes = scatter_matrix(subset_df, diagonal='hist', grid=False)
+    for ax in axes[:, 0]:
+        ax.grid('off', axis='both')
+    for ax in axes[-1, :]:
+        ax.grid('off', axis='both')
+
+    if int(params['round']) == 1:
+        file_name = 'first_round_scatter_matrix_{0}_complete.pdf'.format(fit)
+    elif int(params['round']) == 2:
+        file_name = 'final_round_scatter_matrix_{0}_complete.pdf'.format(fit)
+
+    file_path = os.path.join(fig_dir, file_name)
+    plt.savefig(file_path, format='pdf')
+    plt.close()
+
+    # Then plot top 1 and 5 pct
+    tops = [1, 5]
+    for top in tops:
+
+        top_idx = int(params['samples'] * top * 0.01)
+        top_df = subset_df[:top_idx]
+        if int(params['round']) == 2:
+            top_df.drop('Escape', axis=1, inplace=True)
+        axes = scatter_matrix(top_df, diagonal='hist', grid=False)
+
+        for ax in axes[:, 0]:
+            ax.grid('off', axis='both')
+        for ax in axes[-1, :]:
+            ax.grid('off', axis='both')
+
+        if int(params['round']) == 1:
+            file_name = 'first_round_scatter_matrix_{0}_top_{1}_pct.pdf'.format(fit, top)
+
+        elif int(params['round']) == 2:
+            file_name = 'final_round_scatter_matrix_{0}_top_{1}_pct.pdf'.format(fit, top)
+
+        file_path = os.path.join(fig_dir, file_name)
+        plt.savefig(file_path, format='pdf')
+        plt.close()
+
+
+def revyakin_fit_calc_cycles(GreB=True, fit_extrap=False):
     """
     Interesting. Even if you run with just 50 samples, you still get
     convergence to small values. So to make it fair you'd need to iterate 100,
@@ -949,16 +1256,6 @@ def revyakin_fit_calc(GreB=True, fit_extrap=False):
     Stick to the approach then. Cause it needs to work for more than just the
     optimal case.
 
-    Better for methods: a two-step approach. First sample uniformly from 1 to
-    25 10k times. Look at the top 5% of this run; that's 500 samples, so it
-    should look good in a histogram plot with 30 bars. Choose the 95pct
-    percentiles for NAC and Abort values in the top 5% of results as new
-    boundaries and the average Escape value. Then do an exhaustive 10000k
-    (depending on range; down to 0.1 resolution) gridded search in this new
-    range to find optimal values. You better save this simulation till the end
-    of time. Show a pcolor mesh plots.
-
-    You should save the values from all runs for making pcolormeshplots.
     """
     # Setup
     variant_name = 'N25'
@@ -1011,7 +1308,7 @@ def revyakin_fit_calc(GreB=True, fit_extrap=False):
     shelve_database.close()
 
 
-def add_letters(axes, letters, positions, shiftX=0, shiftY=0):
+def add_letters(axes, letters, positions, shiftX=0, shiftY=0, fontsize=12):
     """
     letters = ('A', 'B') will add A and B to the subplots at positions ('UL
     for example')
@@ -1023,7 +1320,7 @@ def add_letters(axes, letters, positions, shiftX=0, shiftY=0):
     for pos, label, ax in zip(positions, letters, axes):
         ax.text(xy['x'][pos] + shiftX,
                 xy['y'][pos] + shiftY,
-                label, transform=ax.transAxes, fontsize=12,
+                label, transform=ax.transAxes, fontsize=fontsize,
                 fontweight='bold', va='top')
 
 
@@ -1122,10 +1419,8 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
                            initial_RNAP, sim_end, params, plot, log_name,
                            adjust_ap_each_position):
 
-    # So you can save dataframes to disk
-    dataframes = {}
-
-    # And use another weird way of logging the parameter results
+    # For some reason you are logging results to disk instead of memory. Not
+    # sure why.
     fitness_log_file = os.path.join(log_dir, log_name + '.log')
     log_handle = open(fitness_log_file, 'w')
     log_handle.write('Fit\tFit_extrap\tNac\tAbort\tEscape\n')
@@ -1158,8 +1453,6 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
                                                               initial_RNAP, nac,
                                                               abrt, escape)
 
-            dataframes[(val, val_extrap)] = model_ts
-
     if multiproc:
         pool.close()
         pool.join()
@@ -1170,7 +1463,6 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
             val, val_extrap = plot_and_log_scrunch_comparison(plot, log_handle,
                                                               ms, initial_RNAP,
                                                               nac, abrt, escape)
-            dataframes[(val, val_extrap)] = ts
 
     log_handle.close()
 
@@ -1372,23 +1664,32 @@ def get_parameters(samples=10, GreB=True, boundaries=False, method='uniform',
 
     # Initial run
     if boundaries is False:
-        nac_low = 2
+        nac_low = 1
         nac_high = 25
 
         abort_low = 1
         abort_high = 25
 
-        escape_low = 2
+        escape_low = 1
         escape_high = 25
+
+        #nac_low = 9
+        #nac_high = 14
+
+        #abort_low = 1
+        #abort_high = 3
+
+        #escape_low = 2
+        #escape_high = 25
     else:
-        nac_low = boundaries['nac_low']
-        nac_high = boundaries['nac_high']
+        nac_low = max(boundaries['nac_low'], 2)
+        nac_high = min(boundaries['nac_high'], 25)
 
-        abort_low = boundaries['abort_low']
-        abort_high = boundaries['abort_high']
+        abort_low = max(boundaries['abort_low'], 1)
+        abort_high = min(boundaries['abort_high'], 25)
 
-        escape_low = boundaries['escape_low']
-        escape_high = boundaries['escape_high']
+        escape_low = max(boundaries['escape_low'], 2)
+        escape_high = min(boundaries['escape_high'], 25)
 
     params = []
 
@@ -1402,18 +1703,19 @@ def get_parameters(samples=10, GreB=True, boundaries=False, method='uniform',
 
     elif method == 'stepwise':
         if escape_constant:
-            nr_steps = samples / 3.
+            nr_steps = int(samples ** (1. / 2.))
         else:
-            nr_steps = samples / 2.
+            nr_steps = int(samples ** (1. / 3.))
 
         nac = np.linspace(nac_low, nac_high, nr_steps)
         abortive = np.linspace(abort_low, abort_high, nr_steps)
 
         if escape_constant:
-            esc = 12
+            esc = np.mean([escape_low, escape_high])  # mean escape
             # Do some trickery to get the escape rate in there alongside
             params = [list(_) for _ in product(nac, abortive)]
-            params = [_.append(esc) for _ in params]
+            for _ in params:
+                _.append(esc)
         else:
             escape = np.linspace(escape_low, escape_high, nr_steps)
             params = list(product(nac, abortive, escape))
@@ -1619,7 +1921,7 @@ def aps_adjusted_plot(adjusts):
     f.tight_layout()
     f.savefig(os.path.join(fig_dir, 'aps_after_adjustment.pdf'))
 
-    1/0
+    1 / 0
 
 
 def ap_sensitivity_plot():
@@ -1824,15 +2126,302 @@ def plot_sensitivity_analysis():
     f.savefig(file_path, format='pdf')
 
 
+def parameter_estimation_plot():
+    """
+    Use the two 50k simulations you've made (2 rounds) to make plots that show
+    the parameter estimation process. You need to do this in two parts. First
+    you need to show what happens after the random sampling. Show the
+    distribution of the top 5% and the top 1% of results. This explains your
+    boundaries. This is quite a big result on its own. Then do the same for
+    the gridded results. I'm not sure if you should show the x vs y plot,
+    unless it gets drastically better when considering the top 5% and top 1%.
+
+    TODO:
+    1) Make two figures with 3x3 histograms (well, last one without escape,
+    since it's not sensitive).
+    2) Make one figure (1x3) plotting NAC vs Unscrunch using some heat map,
+    for 100, 5, and 1% of the best values. Hopefully we're left with a circle
+    on the figure.
+
+    Or make one 6x3 figure for the supplementary.
+
+    NAC, U+A, Escape
+    I1 100%
+    I1   5%
+    I1   1%
+    I2 100%
+    I2   5%
+    I2   1%
+
+    But for I2, don't have anything for escape, but instead have heatmap 2x2 plotting
+    of NAC vs U+A. At least try that and see how it goes. That's a full page
+    in supplementary materials, or indeed in the main article itself. Not
+    unheard of. You're not shooting for the stars here.
+    """
+
+    # Old was when you used top 5% for setting new boundaries
+    # From now on use top 1% for setting new boundaries.
+    #round_1 = 'Log/RNAP-100_samples-50000_GreB-True_round-1_fitextrap-False.log'
+    #round_2 = 'Log/RNAP-100_samples-50000_GreB-True_round-2_fitextrap-False.log'
+
+    round_1 = 'Log/old_RNAP-100_samples-50000_GreB-True_round-1_fitextrap-False.log'
+    round_2 = 'Log/old_RNAP-100_samples-50000_GreB-True_round-2_fitextrap-False.log'
+
+    # Read from file and sort by Fit
+    r1 = pd.read_csv(round_1, sep='\t').sort('Fit')
+    r2 = pd.read_csv(round_2, sep='\t').sort('Fit')
+
+    nr_samples = r1.shape[0]
+
+    top1 = int(nr_samples * 0.01)
+    top5 = int(nr_samples * 0.05)
+    #top01 = int(nr_samples * 0.001)
+
+    #r1_top01 = r1[:top01]
+    r1_top1 = r1[:top1]
+    r1_top5 = r1[:top5]
+
+    #r2_top01 = r2[:top01]
+    r2_top1 = r2[:top1]
+    r2_top5 = r2[:top5]
+
+    # Min/max values for the x axis
+    xmin_nac = r1['Nac'].min()
+    xmax_nac = r1['Nac'].max()
+
+    xmin_abort = r1['Abort'].min()
+    xmax_abort = r1['Abort'].max()
+
+    xmin_escape = r1['Escape'].min()
+    xmax_escape = r1['Escape'].max()
+
+    #one_figure_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
+                               #xmin_escape, xmax_escape, r1, r1_top5, r1_top1,
+                               #r2, r2_top5, r2_top1, top1, top5)
+
+    two_figures_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
+                                xmin_escape, xmax_escape, r1, r1_top5, r1_top1,
+                                r2, r2_top5, r2_top1, top1, top5)
+
+
+# start adding plots one by one
+def hist_plotter(df, ax, xmin, xmax):
+    df.plot(kind='hist', bins=10, ax=ax, normed=True)
+
+    plt.setp(ax.get_yticklabels(), visible=False)
+    ax.set_ylabel('')
+    ax.set_xlim((xmin, xmax))
+    xticks = np.linspace(xmin, xmax, 3)
+    ax.set_xticks(xticks)
+
+    ax.grid(b='off')
+
+
+def two_figures_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
+                                xmin_escape, xmax_escape, r1, r1_top5,
+                                r1_top1, r2, r2_top5, r2_top1, top1, top5):
+
+    # About one A4 page in size for this plot
+    f1, axes1 = plt.subplots(3, 4, figsize=(8.27, 5.6))
+
+    # First 3 rows (Iteration 1)
+    hist_plotter(r1['Fit'], axes1[0, 0], 0, 2)
+    hist_plotter(r1['Nac'], axes1[0, 1], xmin_nac, xmax_nac)
+    hist_plotter(r1['Abort'], axes1[0, 2], xmin_abort, xmax_abort)
+    hist_plotter(r1['Escape'], axes1[0, 3], xmin_escape, xmax_escape)
+
+    hist_plotter(r1_top5['Fit'], axes1[1, 0], 0, 0.5)
+    hist_plotter(r1_top5['Nac'], axes1[1, 1], xmin_nac, xmax_nac)
+    hist_plotter(r1_top5['Abort'], axes1[1, 2], xmin_abort, xmax_abort)
+    hist_plotter(r1['Escape'], axes1[1, 3], xmin_escape, xmax_escape)
+
+    hist_plotter(r1_top1['Fit'], axes1[2, 0], 0, 0.5)
+    hist_plotter(r1_top1['Nac'], axes1[2, 1], xmin_nac, xmax_nac)
+    hist_plotter(r1_top1['Abort'], axes1[2, 2], xmin_abort, xmax_abort)
+    hist_plotter(r1['Escape'], axes1[2, 3], xmin_escape, xmax_escape)
+
+    # Set titles for the plots
+    axes1[2, 0].set_xlabel('Fit to data')
+    axes1[2, 1].set_xlabel('NAC 1/s')
+    axes1[2, 2].set_xlabel('Unscrunching and\nabortive release 1/s',
+                           multialignment='center')
+    axes1[2, 3].set_xlabel('Escape 1/s')
+
+    axes1[0, 0].set_ylabel('All samples')
+    axes1[1, 0].set_ylabel('Top 5%', multialignment='center')
+    axes1[2, 0].set_ylabel('Top 1%', multialignment='center')
+
+    f1.tight_layout()
+
+    file_name = 'parameter_estimation_distributions_1.pdf'
+    file_path = os.path.join(fig_dir, file_name)
+    f1.savefig(file_path, format='pdf')
+    plt.close(f1)
+
+    #######################################################################
+
+    # About one A4 page in size for this plot
+    f2, axes2 = plt.subplots(3, 4, figsize=(8.27, 5.6))
+
+    # Next 3 rows (Iteration 2)
+    hist_plotter(r2['Fit'], axes2[0, 0], 0, 1)
+    hist_plotter(r2['Nac'], axes2[0, 1], 5, 20)
+    hist_plotter(r2['Abort'], axes2[0, 2], 1, 10)
+
+    hist_plotter(r2_top5['Fit'], axes2[1, 0], 0, 0.15)
+    hist_plotter(r2_top5['Nac'], axes2[1, 1], 5, 20)
+    hist_plotter(r2_top5['Abort'], axes2[1, 2], 1, 10)
+
+    hist_plotter(r2_top1['Fit'], axes2[2, 0], 0, 0.15)
+    hist_plotter(r2_top1['Nac'], axes2[2, 1], 5, 20)
+    hist_plotter(r2_top1['Abort'], axes2[2, 2], 1, 5)
+
+    axes2[2, 0].set_xlabel('Fit to data')
+    axes2[2, 1].set_xlabel('NAC 1/s')
+    axes2[2, 2].set_xlabel('Unscrunching and\nabortive release 1/s',
+                           multialignment='center')
+
+    axes2[0, 0].set_ylabel('All samples')
+    axes2[1, 0].set_ylabel('Top 5%', multialignment='center')
+    axes2[2, 0].set_ylabel('Top 1%', multialignment='center')
+
+    # Heatmaps
+    heatmap(r2, ax=axes2[0, 3])
+    heatmap(r2, ax=axes2[1, 3], max_value=r2.iloc[top5]['Fit'])
+    heatmap(r2, ax=axes2[2, 3], max_value=r2.iloc[top1]['Fit'])
+
+    axes2[0, 3].set_xlabel('NAC 1/s', fontsize=10)
+    axes2[0, 3].set_ylabel('UAR 1/s', fontsize=10)
+    set_ticks(axes2[0, 3], 3)
+
+    axes2[1, 3].set_xlabel('NAC 1/s', fontsize=10)
+    axes2[1, 3].set_ylabel('UAR 1/s', fontsize=10)
+    set_ticks(axes2[1, 3], 3)
+
+    axes2[2, 3].set_xlabel('NAC 1/s', fontsize=10)
+    axes2[2, 3].set_ylabel('UAR 1/s', fontsize=10)
+    set_ticks(axes2[2, 3], 3)
+
+    add_letters((axes2[0, 0],), ('A',), ['UL'], shiftX=-0.1, shiftY=0.2, fontsize=14)
+
+    add_letters((axes2[0, 3], axes2[1, 3], axes2[2, 3]), ('B', 'C', 'D'),
+                ['UL', 'UL', 'UL'], shiftX=0, shiftY=0.2, fontsize=14)
+
+    f2.tight_layout()
+
+    file_name = 'parameter_estimation_distributions_2.pdf'
+    file_path = os.path.join(fig_dir, file_name)
+    f2.savefig(file_path, format='pdf')
+    plt.close(f2)
+
+
+def one_figure_estimation_plot(xmin_nac, xmax_nac, xmin_abort,
+                               xmax_abort, xmin_escape, xmax_escape, r1,
+                               r1_top5, r1_top1, r2, r2_top5, r2_top1, top1,
+                               top5):
+
+    # About one A4 page in size for this plot
+    f, axes = plt.subplots(6, 4, figsize=(8.27, 11.19))
+
+    # First 3 rows (Iteration 1)
+    hist_plotter(r1['Fit'], axes[0, 0], 0, 2)
+    hist_plotter(r1['Nac'], axes[0, 1], xmin_nac, xmax_nac)
+    hist_plotter(r1['Abort'], axes[0, 2], xmin_abort, xmax_abort)
+    hist_plotter(r1['Escape'], axes[0, 3], xmin_escape, xmax_escape)
+
+    hist_plotter(r1_top5['Fit'], axes[1, 0], 0, 0.5)
+    hist_plotter(r1_top5['Nac'], axes[1, 1], xmin_nac, xmax_nac)
+    hist_plotter(r1_top5['Abort'], axes[1, 2], xmin_abort, xmax_abort)
+    hist_plotter(r1['Escape'], axes[1, 3], xmin_escape, xmax_escape)
+
+    hist_plotter(r1_top1['Fit'], axes[2, 0], 0, 0.5)
+    hist_plotter(r1_top1['Nac'], axes[2, 1], xmin_nac, xmax_nac)
+    hist_plotter(r1_top1['Abort'], axes[2, 2], xmin_abort, xmax_abort)
+    hist_plotter(r1['Escape'], axes[2, 3], xmin_escape, xmax_escape)
+
+    # Next 3 rows (Iteration 2)
+    hist_plotter(r2['Fit'], axes[3, 0], 0, 1)
+    hist_plotter(r2['Nac'], axes[3, 1], 5, 20)
+    hist_plotter(r2['Abort'], axes[3, 2], 1, 10)
+
+    hist_plotter(r2_top5['Fit'], axes[4, 0], 0, 0.15)
+    hist_plotter(r2_top5['Nac'], axes[4, 1], 5, 20)
+    hist_plotter(r2_top5['Abort'], axes[4, 2], 1, 10)
+
+    hist_plotter(r2_top1['Fit'], axes[5, 0], 0, 0.15)
+    hist_plotter(r2_top1['Nac'], axes[5, 1], 5, 20)
+    hist_plotter(r2_top1['Abort'], axes[5, 2], 1, 5)
+
+    # Heatmaps
+    heatmap(r2, ax=axes[3, 3])
+    heatmap(r2, ax=axes[4, 3], max_value=r2.iloc[top5]['Fit'])
+    heatmap(r2, ax=axes[5, 3], max_value=r2.iloc[top1]['Fit'])
+
+    # Set titles for the plots
+    axes[0, 0].set_title('Fit')
+    axes[0, 1].set_title('NAC')
+    axes[0, 2].set_title('Unscrunching and\nabortive release',
+                         multialignment='center')
+    axes[0, 3].set_title('Escape')
+
+    axes[0, 0].set_ylabel('First iteration\nall samples')
+    axes[1, 0].set_ylabel('First iteration\ntop 5%', multialignment='center')
+    axes[2, 0].set_ylabel('First iteration\ntop 1%', multialignment='center')
+
+    axes[3, 0].set_ylabel('Second iteration\nall samples')
+    axes[4, 0].set_ylabel('Second iteration\ntop 5%', multialignment='center')
+    axes[5, 0].set_ylabel('Second iteration\ntop 1%', multialignment='center')
+
+    #axes[3, 3].set_title('Parameter\nco-variation', multialignment='center')
+    axes[3, 3].set_xlabel('NAC 1/s', fontsize=10)
+    axes[3, 3].set_ylabel('UAR 1/s', fontsize=10)
+    set_ticks(axes[3, 3], 3)
+
+    axes[4, 3].set_xlabel('NAC 1/s', fontsize=10)
+    axes[4, 3].set_ylabel('UAR 1/s', fontsize=10)
+    set_ticks(axes[4, 3], 3)
+
+    axes[5, 3].set_xlabel('NAC 1/s', fontsize=10)
+    axes[5, 3].set_ylabel('UAR 1/s', fontsize=10)
+    set_ticks(axes[5, 3], 3)
+
+    add_letters((axes[0, 0], axes[3, 0]), ('A', 'B'), ['UL', 'UL'],
+                shiftX=-0.3, shiftY=0.2, fontsize=14)
+
+    add_letters((axes[3, 3], axes[4, 3], axes[5, 3]), ('C', 'D', 'E'), ['UL', 'UL', 'UL'],
+                shiftX=0, shiftY=0.2, fontsize=14)
+
+    f.tight_layout()
+
+    file_name = 'parameter_estimation_distributions.pdf'
+    file_path = os.path.join(fig_dir, file_name)
+    f.savefig(file_path, format='pdf')
+    plt.close(f)
+
+
+def set_ticks(ax, nr_xticks, nr_yticks=False):
+
+    if nr_yticks is False:
+        nr_yticks = nr_xticks
+
+    xbeg, xend = ax.get_xlim()
+    vals = np.linspace(xbeg, xend, nr_xticks)
+    ax.set_xticks(vals)
+
+    ybeg, yend = ax.get_ylim()
+    vals = np.linspace(ybeg, yend, nr_yticks)
+    ax.set_yticks(vals)
+
+
 def main():
 
     # Distributions of % of IQ units and #RNA
     #initial_transcription_stats()
 
-    # Remember, you are overestimating PY even if there is no recycling. Would
-    # recycling lead to higher or lower PY? I'm guessing lower.
+    # Distributions
     #AP_and_pct_values_distributions_DG100()
 
+    # XXX This was the previous method
     # Fitting to Revyakin: +/-GreB, iteratively; save the w/mean
     # and w/std to make a line plot that shows the convergence of the
     # iterative scheme.
@@ -1843,7 +2432,8 @@ def main():
         #revyakin_fit_calc(GreB, fit_extrap=True)
         #revyakin_fit_plot(GreB, fit_extrap=True)
 
-    revyakin_fit_calc(GreB=True)
+    # XXX Now using the two-step approach
+    #revyakin_fit_calc_two_step(GreB=True)
     # Obtain the best parameters for N25 +Greb with extra percentages to AP.
     #ap_sensitivity_calc()
     #ap_sensitivity_plot()
@@ -1857,6 +2447,10 @@ def main():
     # Local sensitivity analysis
     #sensitivity_analysis()
     #plot_sensitivity_analysis()
+
+    # Parameter estimation plotting
+    parameter_estimation_plot()
+    pass
 
 
 if __name__ == '__main__':
