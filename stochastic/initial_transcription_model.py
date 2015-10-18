@@ -136,9 +136,13 @@ class ITModel(object):
 
         # Convert data array to int32
         all_ts = np.array(sim.data_stochsim.species, dtype=np.int32)
+
+        # Has this been fixed in 2.3?
+        time = sim.data_stochsim.time
+
+        # v. 2.2
         # ehy, the time array is weird; maybe a bug?
-        #time = sim.data_stochsim.time
-        time = [t[0] for t in sim.data_stochsim.time]
+        #time = [t[0] for t in sim.data_stochsim.time]
 
         data = OrderedDict()
         for species in species_names:
