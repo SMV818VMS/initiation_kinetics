@@ -11,8 +11,9 @@ from ITSframework import calc_abortive_probability
 from kinetic_transcription_models import ITStoichiometricSetup
 from KineticRateConstants import ITRates
 from initial_transcription_model import ITModel, ITSimulationSetup
-#from ITSframework import calc_abortive_probability
 from metrics import weighted_avg_and_std
+sys.path.append('auxiliary')
+from auxiliary import print_time
 import data_handler
 import stochastic_model_run as smr
 import matplotlib.pyplot as plt
@@ -23,18 +24,15 @@ from collections import OrderedDict, defaultdict
 from itertools import product
 from pandas.tools.plotting import scatter_matrix
 
-#plt.ioff()
-#plt.ioff()
-plt.ion()
-
-#import seaborn as sns
 from ipdb import set_trace as debug  # NOQA
 from scipy.interpolate import InterpolatedUnivariateSpline as interpolate
 from scipy.optimize import curve_fit
 
 # Global place for where you store your figures
 here = os.path.abspath(os.path.dirname(__file__))  # where this script is located
-fig_dir = os.path.join(here, 'figures')
+#fig_dir = os.path.join(here, 'figures')
+# XXX save directly to manuscript directory
+fig_dir = '/home/jorgsk/Dropbox/The-Tome/my_papers/kinetic_initiation/figures'
 
 log_dir = 'Log'
 scrunch_db = os.path.join(log_dir, 'scrunch_fit_df_storage')
@@ -43,7 +41,7 @@ scrunch_db = os.path.join(log_dir, 'scrunch_fit_df_storage')
 simulation_storage = os.path.join(here, 'storage', 'shelve_storage_sim')
 
 # Global setting for max processors
-max_proc = 3
+max_proc = 4
 
 # Figure sizes in centimeter. Height is something you might set maually but
 # width should always be the maximum
@@ -869,160 +867,6 @@ def simple_vo_2003_comparison():
     f1.savefig('GreB_plus_and_GreB_minus_kinetics.pdf')
 
 
-def revyakin_fit_plot(GreB=True, fit_extrap=False):
-    """
-    Plot data from fit to Revyakin data
-    """
-
-    # A bit lame: database with one entry
-    # But it allows you to tweak the plot long after running the simulation
-    shelve_database = shelve.open(simulation_storage)
-    params_per_cycle = shelve_database['params_{0}_{1}'.format(GreB, fit_extrap)]
-    shelve_database.close()
-
-    NAC_mean = [value['NAC'][0] for value in params_per_cycle.values()]
-    NAC_std = [value['NAC'][1] for value in params_per_cycle.values()]
-
-    escape_mean = [value['Escape'][0] for value in params_per_cycle.values()]
-    escape_std = [value['Escape'][1] for value in params_per_cycle.values()]
-
-    unscrunch_mean = [value['Unscrunch'][0] for value in params_per_cycle.values()]
-    unscrunch_std = [value['Unscrunch'][1] for value in params_per_cycle.values()]
-
-    df_mean = pd.DataFrame(data={'NAC': NAC_mean,
-                                 'Escape': escape_mean,
-                                 'Unscrunch': unscrunch_mean},
-                           index=range(1, len(NAC_mean) + 1))
-
-    dict_err = {'NAC': NAC_std, 'Escape': escape_std, 'Unscrunch': unscrunch_std}
-    df_mean = df_mean[dict_err.keys()]  # get df in same order as dict
-
-    f, axes = plt.subplots(3)
-    df_mean.plot(subplots=True, ax=axes, yerr=dict_err,
-                 sharex=True,
-                 xlim=(0.5, len(NAC_mean) + 0.5),
-                 xticks=range(1, len(NAC_mean) + 1),
-                 ylim=(0, 26),
-                 legend=False,
-                 rot=0)
-
-    axes[-1].set_xlabel('Parameter estimation cycle')
-
-    for ax, rc in zip(axes, df_mean.columns):
-        ax.set_ylabel('{0} (1/s)'.format(rc))
-
-    add_letters(axes, ['A', 'B', 'C'], ['UL'] * 3)
-
-    #set_fig_size(f, current_journal_width, 8)
-    f.savefig(os.path.join(fig_dir, 'parameter_estimation_cycles_GreB_{0}_{1}.pdf'.format(GreB, fit_extrap)))
-
-    # Print to screen
-    print("Mean")
-    print(df_mean)
-    print('Std')
-    print(pd.DataFrame(data=dict_err, index=df_mean.index))
-
-    # Also print Tau from Vo to have it at hand
-    # That's not Vo!
-    tau = get_tau(1000, 2000, NAC_mean[-1], unscrunch_mean[-1], escape_mean[-1])
-    print('Tau from Vo et al')
-    print(tau)
-
-
-def revyakin_fit_calc_two_step(GreB=True, fit_extrap=False):
-    """
-    Better for methods: a two-step approach. First sample uniformly from 1 to
-    25 10k times. Look at the top 5% of this run; that's 500 samples, so it
-    should look good in a histogram plot with 30 bars. Choose the 95pct
-    percentiles for NAC and Abort values in the top 5% of results as new
-    boundaries and the average Escape value. Then do an exhaustive 10000k
-    (depending on range; down to 0.1 resolution) gridded search in this new
-    range to find optimal values. You better save this simulation till the end
-    of time. Show a pcolor mesh plots.
-
-    Finally, choose the average of the 5% best results in the last run as your
-    official values.
-
-    You should save the values from all runs for making pcolormeshplots.
-    """
-    # Setup
-    variant_name = 'N25'
-    ITSs = data_handler.ReadData('dg100-new')
-    its_variant = [i for i in ITSs if i.name == variant_name][0]
-    initial_RNAP = 100
-    sim_end = 9000
-    escape_RNA_length = 14
-
-    samples_round_1 = 50000
-    samples_round_2 = 50000
-
-    #samples_round_1 = 5000
-    #samples_round_2 = 5000
-
-    boundaries = False
-
-    plot = False
-    #plot = True
-
-    multiproc = True
-    #multiproc = False
-
-    # -----------------------------------------------------------------------------------------
-    # Round 1
-    #
-    shelve_database = shelve.open(simulation_storage)
-
-    log_name = 'RNAP-{0}_samples-{1}_GreB-{2}_round-{3}_fitextrap-{4}'.format(initial_RNAP,
-                                                                              samples_round_1,
-                                                                              GreB,
-                                                                              1, fit_extrap)
-    params = get_parameters(samples=samples_round_1, GreB=GreB,
-                            boundaries=boundaries,
-                            method='uniform')
-    stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
-    search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
-                           initial_RNAP, sim_end, params, plot, log_name, False)
-    new_boundaries, stats = get_new_boundaries(log_name, fit_extrap, samples_round_1)
-
-    dbstr = 'new_boundaries_first_round_GreB-{0}_fitextrap-{1}_samples-{2}'.format(GreB,
-                                                                                   fit_extrap,
-                                                                                   samples_round_1)
-    shelve_database[dbstr] = new_boundaries
-    # -----------------------------------------------------------------------------------------
-
-    # -----------------------------------------------------------------------------------------
-    # Round 2
-    #
-    log_name = 'RNAP-{0}_samples-{1}_GreB-{2}_round-{3}_fitextrap-{4}'.format(initial_RNAP,
-                                                                              samples_round_2,
-                                                                              GreB,
-                                                                              2, fit_extrap)
-    params = get_parameters(samples=samples_round_2, GreB=GreB,
-                            boundaries=new_boundaries,
-                            method='stepwise', escape_constant=True)
-    stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
-    search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
-                           initial_RNAP, sim_end, params, plot, log_name, False)
-
-    final_boundaries, final_stats = get_new_boundaries(log_name, fit_extrap, samples_round_2)
-
-    dbstr = 'final_boundaries_GreB-{0}_fitextrap-{1}_samples-{2}'.format(GreB,
-                                                                         fit_extrap,
-                                                                         samples_round_2)
-    shelve_database[dbstr] = final_boundaries
-    # Plot heatmaps of the final grid of nac and abortive
-    plot_heatmaps(log_name)
-    print(final_stats)
-    dbstr_values = 'params-final_GreB-{0}_fit_extrap-{1}_samples1-{2}_samples2-{3}'.format(GreB,
-                                                                                           fit_extrap,
-                                                                                           samples_round_1,
-                                                                                           samples_round_2)
-    shelve_database[dbstr_values] = final_stats
-    # -----------------------------------------------------------------------------------------
-
-    shelve_database.close()
-
-
 def heatmap(df, fit_name='Fit', ax=False, max_value=False):
     """
     Plot heatmap of Nac and Abort from a dataframe
@@ -1108,8 +952,6 @@ def get_new_boundaries(log_name, fit_extrap, nr_samples):
         fit = 'Fit'
 
     df.sort(fit, inplace=True)
-
-    plot_parameter_scatter_matrix(log_name)
 
     # Get values from top1
     top_5pct_idx = int(nr_samples * 0.01)
@@ -1230,84 +1072,6 @@ def plot_parameter_scatter_matrix(log_name):
         plt.close()
 
 
-def revyakin_fit_calc_cycles(GreB=True, fit_extrap=False):
-    """
-    Interesting. Even if you run with just 50 samples, you still get
-    convergence to small values. So to make it fair you'd need to iterate 100,
-    500, 1000 samples to also see a convergence in the convergence of values.
-
-    The method is very sensitive to the initial number of simulations. It's
-    important to start with a very high number. Subsequent steps mostly reduce
-    uncertainty.
-
-    The escape parameter is insensitive; remove it and you can simulate a lot
-    faster, covering more ground. If you first do a stochastic search that
-    allowes you to narrow down NAC and abort, and at the same time set escape
-    to be constant. Then you can do an exhaustive grid search for NAC and
-    abort; 5k simulations gives you a grid of 70 values for each variable. If
-    NAC is between 5 and 15.
-
-    Or save yourself some hassle and do the following: assume that NAC is no
-    faster than during elongation; measured at 14 for one supercoil
-    configuration; you set the number at 15. Set lowest number at 2. Use the
-    same for abort. For escape, set a value between 2 and 20.
-
-    But then you run into problems repeating the method for -GreB :)
-    Stick to the approach then. Cause it needs to work for more than just the
-    optimal case.
-
-    """
-    # Setup
-    variant_name = 'N25'
-    ITSs = data_handler.ReadData('dg100-new')
-    its_variant = [i for i in ITSs if i.name == variant_name][0]
-    initial_RNAP = 100
-    sim_end = 5000
-    escape_RNA_length = 14
-
-    samples_per_cycle = 1000
-    #samples_per_cycle = 200
-
-    cycles = 4
-    boundaries = False
-
-    plot = False
-    #plot = True
-
-    multiproc = True
-    #multiproc = False
-
-    escape_constant = True
-
-    # When unpacking you can rely on getting cycle-order
-    params_per_cycle = OrderedDict()
-    shelve_database = shelve.open(simulation_storage)
-    for cycle in range(cycles):
-
-        log_name = '{0}-RNAP_{1}-samples_{2}-GreB_scrunch_cycle_{3}_fit_extrap'.format(initial_RNAP,
-                                                                                       samples_per_cycle,
-                                                                                       GreB,
-                                                                                       cycle,
-                                                                                       fit_extrap)
-
-        params = get_parameters(samples=samples_per_cycle, GreB=GreB,
-                                boundaries=boundaries,
-                                escape_constant=escape_constant,
-                                method='stepwise')
-
-        stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
-
-        search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
-                               initial_RNAP, sim_end, params, plot, log_name, False)
-
-        new_boundaries, stats = get_weighted_parameter_distributions(log_name, fit_extrap)
-
-        params_per_cycle[cycle] = stats
-
-    shelve_database['params_{0}_{1}'.format(GreB, fit_extrap)] = params_per_cycle
-    shelve_database.close()
-
-
 def add_letters(axes, letters, positions, shiftX=0, shiftY=0, fontsize=12):
     """
     letters = ('A', 'B') will add A and B to the subplots at positions ('UL
@@ -1324,23 +1088,18 @@ def add_letters(axes, letters, positions, shiftX=0, shiftY=0, fontsize=12):
                 fontweight='bold', va='top')
 
 
-def get_weighted_parameter_distributions(log_name, fit_extrap=False):
+def get_weighted_parameter_distributions(df, fit_extrap=False):
 
     # Use the top 20 results to decide on new parameter values
     top = 20
     #top = 15
-
-    fitness_log_file = os.path.join(log_dir, log_name + '.log')
-    df = pd.read_csv(fitness_log_file, sep='\t', header=0)
 
     if fit_extrap:
         fit = 'Fit_extrap'
     else:
         fit = 'Fit'
 
-    df.sort(fit, inplace=True)
-    # write back the sorted df
-    df.to_csv(fitness_log_file, sep='\t')
+    df.sort_values(fit, inplace=True)
 
     df = df[:top]
     # But drop any rows with NaN values in the Fit column
@@ -1358,26 +1117,11 @@ def get_weighted_parameter_distributions(log_name, fit_extrap=False):
     new_index = np.linspace(dff.index.min(), dff.index.max(), 200)
     dff = dff.reindex(new_index, method='nearest')
 
-    f, axes = plt.subplots(3)
-    dff.plot(kind='hist', ax=axes, use_index=True, bins=10, legend=False,
-             normed=True, subplots=True)
-
-    axes[1].set_xlabel('Unschrunching (1/s)')
-    axes[1].set_ylabel('Weighted frequency')
-    axes[2].set_xlabel('Nucleotide addition cycle (1/s)')
-    axes[2].set_ylabel('Weighted frequency')
-    axes[0].set_xlabel('Escape rate(1/s)')
-    axes[0].set_ylabel('Weighted frequency')
-
-    f.tight_layout()
-    f.savefig(os.path.join('figures', 'rate_distribution_' + log_name + '.pdf'))
-
     # Print weighted mean and std of Nac and abort
     nac_wmean, nac_wstd = weighted_avg_and_std(df['Nac'], weight)
     abort_wmean, abort_wstd = weighted_avg_and_std(df['Abort'], weight)
     escape_wmean, escape_wstd = weighted_avg_and_std(df['Escape'], weight)
 
-    print(log_name)
     print('abort', abort_wmean, abort_wstd)
     print('nac', nac_wmean, nac_wstd)
     print('escape', escape_wmean, escape_wstd)
@@ -1415,43 +1159,57 @@ def get_weighted_parameter_distributions(log_name, fit_extrap=False):
     return boundaries, stats
 
 
-def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
-                           initial_RNAP, sim_end, params, plot, log_name,
-                           adjust_ap_each_position):
+def add_search_result(result, fit, fit_extrap, nac, abrt, escape):
 
-    # For some reason you are logging results to disk instead of memory. Not
-    # sure why.
-    fitness_log_file = os.path.join(log_dir, log_name + '.log')
-    log_handle = open(fitness_log_file, 'w')
-    log_handle.write('Fit\tFit_extrap\tNac\tAbort\tEscape\n')
+    result['Fit'].append(fit)
+    result['Fit_extrap'].append(fit_extrap)
+    result['NAC'].append(nac)
+    result['Abort'].append(abrt)
+    result['Escape'].append(escape)
+
+
+def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
+                           initial_RNAP, sim_end, params, adjust_ap_each_position):
+    """
+    Run simulation with the given setup. Compare scrunch-distribution of model
+    with experimental measurements. Return dataframe with:
+
+    Fit: fit to measured data points
+    Fit_extrap: fit to extrapolated scrunch distribution
+    NAC: NAC rate constant
+    Abort: unscrunching and abortive release rate constant
+    Escape: promoter escape rate constant
+    """
+
+    # For comparison with experimental
+    experiment, extrapolated = get_experiment_scrunch_distribution()
+
+    # Store the results in dict for converting to DataFrame later
+    result = defaultdict(list)
 
     if multiproc:
         pool = Pool(max_proc)
         results = []
 
     for nac, abrt, escape in params:
-
         R = ITRates(its_variant, nac=nac, unscrunch=abrt, escape=escape,
                     GreB_AP=GreB, adjust_ap_each_position=adjust_ap_each_position)
 
         sim_name = get_sim_name(stoi_setup, its_variant)
-
         sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end)
-
         model = ITModel(sim_setup)
 
-        # Is it true that results don't get back in the order I call them?
         if multiproc:
             args = {'include_elongation': True}
             r = pool.apply_async(model.run, args)
             results.append(r)
         else:
             model_ts = model.run(include_elongation=True)
-            model_scrunches = calc_scrunch_distribution(model_ts, initial_RNAP)
-            val, val_extrap = plot_and_log_scrunch_comparison(plot, log_handle,
-                                                              model_scrunches,
-                                                              initial_RNAP, nac,
-                                                              abrt, escape)
+            scrunch_dist = calc_scrunch_distribution(model_ts, initial_RNAP)
+            fit, fit_extrap = compare_scrunch_data(scrunch_dist, experiment, extrapolated)
+
+            # Add result
+            add_search_result(result, fit, fit_extrap, nac, abrt, escape)
 
     if multiproc:
         pool.close()
@@ -1459,29 +1217,15 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
         model_timeseries = [res.get() for res in results]
         for ts, pars in zip(model_timeseries, params):
             nac, abrt, escape = pars
-            ms = calc_scrunch_distribution(ts, initial_RNAP)
-            val, val_extrap = plot_and_log_scrunch_comparison(plot, log_handle,
-                                                              ms, initial_RNAP,
-                                                              nac, abrt, escape)
+            scrunch_dist = calc_scrunch_distribution(ts, initial_RNAP)
+            fit, fit_extrap = compare_scrunch_data(scrunch_dist, experiment, extrapolated)
 
-    log_handle.close()
+            # Add result
+            add_search_result(result, fit, fit_extrap, nac, abrt, escape)
 
+    result_df = pd.DataFrame(result)
 
-def plot_and_log_scrunch_comparison(plot, log_handle, model_scrunches, initial_RNAP,
-                                    nac, abrt, escape):
-    """
-    Convenience function for running in parallel
-    """
-
-    experiment, extrapolated = get_experiment_scrunch_distribution()
-    val, val_extrap = compare_scrunch_data(model_scrunches, experiment, extrapolated)
-    entry = '{0}\t{1}\t{2}\t{3}\t{4}'.format(val, val_extrap, nac, abrt, escape)
-    log_handle.write(entry + '\n')
-
-    if plot:
-        plot_scrunch_distributions(model_scrunches, experiment, extrapolated, entry)
-
-    return val, val_extrap
+    return result_df
 
 
 def plot_scrunch_distributions(model_scrunches, expt, expt_extrapolated,
@@ -1544,23 +1288,6 @@ def plot_scrunch_distributions(model_scrunches, expt, expt_extrapolated,
         ax.axvspan(0, 1, ymin=0, ymax=1, facecolor='g', alpha=0.1)
 
         f.savefig(os.path.join(fig_dir, filename))
-
-        plt.close(f)
-
-    hist_plot = False
-    if hist_plot:
-        just_data = np.asarray(model_scrunches.index)
-        df = pd.DataFrame({'Model': just_data})
-
-        # Hey that won't work, it's just a line for the cumulated probability. You
-        # need to resample the distribution to get the underlying data.
-        #if plot_expt:
-            #df['Experiment_fit'] = np.asarray(expt_extrapolated.index)
-
-        f, ax = plt.subplots()
-        df.plot(ax=ax, kind='hist', fontsize=20, label=False, bins=50)
-        f.set_size_inches(9, 9)
-        f.savefig('scrunch_times_histogram.pdf')
         plt.close(f)
 
 
@@ -1652,8 +1379,7 @@ def get_sim_name(stoi_setup, its_name):
     return sim_name
 
 
-def get_parameters(samples=10, GreB=True, boundaries=False, method='uniform',
-                   escape_constant=False):
+def get_parameters(samples=10, boundaries=False):
     """
     For Revyakin data you got a similar result for stepwise and uniform
     parameter sampling.
@@ -1673,14 +1399,6 @@ def get_parameters(samples=10, GreB=True, boundaries=False, method='uniform',
         escape_low = 1
         escape_high = 25
 
-        #nac_low = 9
-        #nac_high = 14
-
-        #abort_low = 1
-        #abort_high = 3
-
-        #escape_low = 2
-        #escape_high = 25
     else:
         nac_low = max(boundaries['nac_low'], 2)
         nac_high = min(boundaries['nac_high'], 25)
@@ -1692,33 +1410,13 @@ def get_parameters(samples=10, GreB=True, boundaries=False, method='uniform',
         escape_high = min(boundaries['escape_high'], 25)
 
     params = []
+    # Uniform sampling
+    for sample_nr in range(samples):
+        nac = uniform(nac_low, nac_high)
+        abortive = uniform(abort_low, abort_high)
+        escape = uniform(escape_low, escape_high)
 
-    if method == 'uniform':
-        for sample_nr in range(samples):
-            nac = uniform(nac_low, nac_high)
-            abortive = uniform(abort_low, abort_high)
-            escape = uniform(escape_low, escape_high)
-
-            params.append((nac, abortive, escape))
-
-    elif method == 'stepwise':
-        if escape_constant:
-            nr_steps = int(samples ** (1. / 2.))
-        else:
-            nr_steps = int(samples ** (1. / 3.))
-
-        nac = np.linspace(nac_low, nac_high, nr_steps)
-        abortive = np.linspace(abort_low, abort_high, nr_steps)
-
-        if escape_constant:
-            esc = np.mean([escape_low, escape_high])  # mean escape
-            # Do some trickery to get the escape rate in there alongside
-            params = [list(_) for _ in product(nac, abortive)]
-            for _ in params:
-                _.append(esc)
-        else:
-            escape = np.linspace(escape_low, escape_high, nr_steps)
-            params = list(product(nac, abortive, escape))
+        params.append((nac, abortive, escape))
 
     return params
 
@@ -1775,15 +1473,16 @@ def ap_sensitivity_calc():
             log_name = log_str.format(initial_RNAP, samples_per_cycle, GreB,
                                       cycle, ap_adjustment)
 
-            params = get_parameters(samples=samples_per_cycle, GreB=GreB,
+            params = get_parameters(samples=samples_per_cycle,
                                     boundaries=boundaries)
             stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
 
-            search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
-                                   initial_RNAP, sim_end, params, plot, log_name,
-                                   ap_adjustment)
+            result = search_parameter_space(multiproc, its_variant, GreB,
+                                            stoi_setup, initial_RNAP, sim_end,
+                                            params, plot, log_name,
+                                            ap_adjustment)
 
-            boundaries, stats = get_weighted_parameter_distributions(log_name)
+            boundaries, stats = get_weighted_parameter_distributions(result)
 
             optimal_values[cycle] = {n: stats[n][0] for n in names}
 
@@ -2165,25 +1864,28 @@ def parameter_estimation_plot():
     #round_2 = 'Log/RNAP-100_samples-50000_GreB-True_round-2_fitextrap-False.log'
 
     round_1 = 'Log/old_RNAP-100_samples-50000_GreB-True_round-1_fitextrap-False.log'
-    round_2 = 'Log/old_RNAP-100_samples-50000_GreB-True_round-2_fitextrap-False.log'
+    #round_2 = 'Log/old_RNAP-100_samples-50000_GreB-True_round-2_fitextrap-False.log'
+    #round_0 = 'Log/RNAP-100_samples-60000_GreB-True_round-stepwise_fitextrap-False_high_res.log'
 
     # Read from file and sort by Fit
-    r1 = pd.read_csv(round_1, sep='\t').sort('Fit')
-    r2 = pd.read_csv(round_2, sep='\t').sort('Fit')
+    r1 = pd.read_csv(round_1, sep='\t').sort_values('Fit')
+    #r2 = pd.read_csv(round_2, sep='\t').sort_values('Fit')
+    #r0 = pd.read_csv(round_0, sep='\t').sort_values('Fit')
 
     nr_samples = r1.shape[0]
 
     top1 = int(nr_samples * 0.01)
-    top5 = int(nr_samples * 0.05)
-    #top01 = int(nr_samples * 0.001)
+    top01 = int(nr_samples * 0.001)
 
     #r1_top01 = r1[:top01]
     r1_top1 = r1[:top1]
-    r1_top5 = r1[:top5]
+    r1_top01 = r1[:top01]
 
+    #r2_top1 = r2[:top1]
     #r2_top01 = r2[:top01]
-    r2_top1 = r2[:top1]
-    r2_top5 = r2[:top5]
+
+    #r0_top1 = r0[:top1]
+    #r0_top01 = r0[:top01]
 
     # Min/max values for the x axis
     xmin_nac = r1['Nac'].min()
@@ -2195,13 +1897,17 @@ def parameter_estimation_plot():
     xmin_escape = r1['Escape'].min()
     xmax_escape = r1['Escape'].max()
 
-    #one_figure_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
-                               #xmin_escape, xmax_escape, r1, r1_top5, r1_top1,
-                               #r2, r2_top5, r2_top1, top1, top5)
+    debug()
 
-    two_figures_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
-                                xmin_escape, xmax_escape, r1, r1_top5, r1_top1,
-                                r2, r2_top5, r2_top1, top1, top5)
+    only_first_iteration_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
+                              xmin_escape, xmax_escape, r1, r1_top01, r1_top1,
+                              top1, top01)
+
+    #one_figure_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
+                               #xmin_escape, xmax_escape, r1, r1_top01, r1_top1,
+                               #r2, r2_top01, r2_top1, top1, top01)
+
+    #two_figures_estimation_plot()
 
 
 # start adding plots one by one
@@ -2211,15 +1917,15 @@ def hist_plotter(df, ax, xmin, xmax):
     plt.setp(ax.get_yticklabels(), visible=False)
     ax.set_ylabel('')
     ax.set_xlim((xmin, xmax))
-    xticks = np.linspace(xmin, xmax, 3)
+    xticks = np.linspace(xmin, xmax, 5)
     ax.set_xticks(xticks)
 
     ax.grid(b='off')
 
 
-def two_figures_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
-                                xmin_escape, xmax_escape, r1, r1_top5,
-                                r1_top1, r2, r2_top5, r2_top1, top1, top5):
+def only_first_iteration_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
+                              xmin_escape, xmax_escape, r1, r1_top01, r1_top1,
+                              top1, top01):
 
     # About one A4 page in size for this plot
     f1, axes1 = plt.subplots(3, 4, figsize=(8.27, 5.6))
@@ -2230,26 +1936,68 @@ def two_figures_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
     hist_plotter(r1['Abort'], axes1[0, 2], xmin_abort, xmax_abort)
     hist_plotter(r1['Escape'], axes1[0, 3], xmin_escape, xmax_escape)
 
-    hist_plotter(r1_top5['Fit'], axes1[1, 0], 0, 0.5)
-    hist_plotter(r1_top5['Nac'], axes1[1, 1], xmin_nac, xmax_nac)
-    hist_plotter(r1_top5['Abort'], axes1[1, 2], xmin_abort, xmax_abort)
-    hist_plotter(r1['Escape'], axes1[1, 3], xmin_escape, xmax_escape)
+    hist_plotter(r1_top1['Fit'], axes1[1, 0], 0, 0.2)
+    hist_plotter(r1_top1['Nac'], axes1[1, 1], xmin_nac, xmax_nac)
+    hist_plotter(r1_top1['Abort'], axes1[1, 2], 1, 5)
+    hist_plotter(r1_top1['Escape'], axes1[1, 3], xmin_escape, xmax_escape)
 
-    hist_plotter(r1_top1['Fit'], axes1[2, 0], 0, 0.5)
-    hist_plotter(r1_top1['Nac'], axes1[2, 1], xmin_nac, xmax_nac)
-    hist_plotter(r1_top1['Abort'], axes1[2, 2], xmin_abort, xmax_abort)
-    hist_plotter(r1['Escape'], axes1[2, 3], xmin_escape, xmax_escape)
+    hist_plotter(r1_top01['Fit'], axes1[2, 0], 0, 0.2)
+    hist_plotter(r1_top01['Nac'], axes1[2, 1], xmin_nac, xmax_nac)
+    hist_plotter(r1_top01['Abort'], axes1[2, 2], 1, 5)
+    hist_plotter(r1_top01['Escape'], axes1[2, 3], xmin_escape, xmax_escape)
 
     # Set titles for the plots
-    axes1[2, 0].set_xlabel('Fit to data')
+    axes1[2, 0].set_xlabel('Root mean squared distance')
+    axes1[2, 1].set_xlabel('NAC (1/s)')
+    axes1[2, 2].set_xlabel('Unscrunching and\nabortive release (1/s)',
+                           multialignment='center')
+    axes1[2, 3].set_xlabel('Escape (1/s)')
+
+    axes1[0, 0].set_ylabel('All samples')
+    axes1[1, 0].set_ylabel('Top 1%', multialignment='center')
+    axes1[2, 0].set_ylabel('Top 0.1%', multialignment='center')
+
+    f1.tight_layout()
+
+    file_name = 'parameter_estimation_distributions_monte_carlo.pdf'
+    file_path = os.path.join(fig_dir, file_name)
+    f1.savefig(file_path, format='pdf')
+    plt.close(f1)
+
+
+def two_figures_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
+                                xmin_escape, xmax_escape, r1, r1_top01,
+                                r1_top1, r2, r2_top01, r2_top1, top1, top01):
+
+    # About one A4 page in size for this plot
+    f1, axes1 = plt.subplots(3, 4, figsize=(8.27, 5.6))
+
+    # First 3 rows (Iteration 1)
+    hist_plotter(r1['Fit'], axes1[0, 0], 0, 2)
+    hist_plotter(r1['Nac'], axes1[0, 1], xmin_nac, xmax_nac)
+    hist_plotter(r1['Abort'], axes1[0, 2], xmin_abort, xmax_abort)
+    hist_plotter(r1['Escape'], axes1[0, 3], xmin_escape, xmax_escape)
+
+    hist_plotter(r1_top1['Fit'], axes1[1, 0], 0, 0.2)
+    hist_plotter(r1_top1['Nac'], axes1[1, 1], xmin_nac, xmax_nac)
+    hist_plotter(r1_top1['Abort'], axes1[1, 2], 1, 5)
+    hist_plotter(r1_top1['Escape'], axes1[1, 3], xmin_escape, xmax_escape)
+
+    hist_plotter(r1_top01['Fit'], axes1[2, 0], 0, 0.2)
+    hist_plotter(r1_top01['Nac'], axes1[2, 1], xmin_nac, xmax_nac)
+    hist_plotter(r1_top01['Abort'], axes1[2, 2], 1, 5)
+    hist_plotter(r1_top01['Escape'], axes1[2, 3], xmin_escape, xmax_escape)
+
+    # Set titles for the plots
+    axes1[2, 0].set_xlabel('Root mean squared distance')
     axes1[2, 1].set_xlabel('NAC 1/s')
     axes1[2, 2].set_xlabel('Unscrunching and\nabortive release 1/s',
                            multialignment='center')
     axes1[2, 3].set_xlabel('Escape 1/s')
 
     axes1[0, 0].set_ylabel('All samples')
-    axes1[1, 0].set_ylabel('Top 5%', multialignment='center')
-    axes1[2, 0].set_ylabel('Top 1%', multialignment='center')
+    axes1[1, 0].set_ylabel('Top 1%', multialignment='center')
+    axes1[2, 0].set_ylabel('Top 0.1%', multialignment='center')
 
     f1.tight_layout()
 
@@ -2268,17 +2016,17 @@ def two_figures_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
     hist_plotter(r2['Nac'], axes2[0, 1], 5, 20)
     hist_plotter(r2['Abort'], axes2[0, 2], 1, 10)
 
-    hist_plotter(r2_top5['Fit'], axes2[1, 0], 0, 0.15)
-    hist_plotter(r2_top5['Nac'], axes2[1, 1], 5, 20)
-    hist_plotter(r2_top5['Abort'], axes2[1, 2], 1, 10)
+    hist_plotter(r2_top01['Fit'], axes2[1, 0], 0, 0.15)
+    hist_plotter(r2_top01['Nac'], axes2[1, 1], 5, 20)
+    hist_plotter(r2_top01['Abort'], axes2[1, 2], 1, 10)
 
     hist_plotter(r2_top1['Fit'], axes2[2, 0], 0, 0.15)
     hist_plotter(r2_top1['Nac'], axes2[2, 1], 5, 20)
     hist_plotter(r2_top1['Abort'], axes2[2, 2], 1, 5)
 
-    axes2[2, 0].set_xlabel('Fit to data')
-    axes2[2, 1].set_xlabel('NAC 1/s')
-    axes2[2, 2].set_xlabel('Unscrunching and\nabortive release 1/s',
+    axes2[2, 0].set_xlabel('Root mean squared distance')
+    axes2[2, 1].set_xlabel('NAC (1/s)')
+    axes2[2, 2].set_xlabel('Unscrunching and\nabortive release (1/s)',
                            multialignment='center')
 
     axes2[0, 0].set_ylabel('All samples')
@@ -2286,20 +2034,20 @@ def two_figures_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
     axes2[2, 0].set_ylabel('Top 1%', multialignment='center')
 
     # Heatmaps
-    heatmap(r2, ax=axes2[0, 3])
-    heatmap(r2, ax=axes2[1, 3], max_value=r2.iloc[top5]['Fit'])
-    heatmap(r2, ax=axes2[2, 3], max_value=r2.iloc[top1]['Fit'])
+    #heatmap(r2, ax=axes2[0, 3])
+    #heatmap(r2, ax=axes2[1, 3], max_value=r2.iloc[top01]['Fit'])
+    #heatmap(r2, ax=axes2[2, 3], max_value=r2.iloc[top1]['Fit'])
 
-    axes2[0, 3].set_xlabel('NAC 1/s', fontsize=10)
-    axes2[0, 3].set_ylabel('UAR 1/s', fontsize=10)
+    axes2[0, 3].set_xlabel('NAC (1/s)', fontsize=10)
+    axes2[0, 3].set_ylabel('UAR (1/s)', fontsize=10)
     set_ticks(axes2[0, 3], 3)
 
-    axes2[1, 3].set_xlabel('NAC 1/s', fontsize=10)
-    axes2[1, 3].set_ylabel('UAR 1/s', fontsize=10)
+    axes2[1, 3].set_xlabel('NAC (1/s)', fontsize=10)
+    axes2[1, 3].set_ylabel('UAR (1/s)', fontsize=10)
     set_ticks(axes2[1, 3], 3)
 
-    axes2[2, 3].set_xlabel('NAC 1/s', fontsize=10)
-    axes2[2, 3].set_ylabel('UAR 1/s', fontsize=10)
+    axes2[2, 3].set_xlabel('NAC (1/s)', fontsize=10)
+    axes2[2, 3].set_ylabel('UAR (1/s)', fontsize=10)
     set_ticks(axes2[2, 3], 3)
 
     add_letters((axes2[0, 0],), ('A',), ['UL'], shiftX=-0.1, shiftY=0.2, fontsize=14)
@@ -2317,8 +2065,8 @@ def two_figures_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
 
 def one_figure_estimation_plot(xmin_nac, xmax_nac, xmin_abort,
                                xmax_abort, xmin_escape, xmax_escape, r1,
-                               r1_top5, r1_top1, r2, r2_top5, r2_top1, top1,
-                               top5):
+                               r1_top01, r1_top1, r2, r2_top01, r2_top1, top1,
+                               top01):
 
     # About one A4 page in size for this plot
     f, axes = plt.subplots(6, 4, figsize=(8.27, 11.19))
@@ -2329,32 +2077,32 @@ def one_figure_estimation_plot(xmin_nac, xmax_nac, xmin_abort,
     hist_plotter(r1['Abort'], axes[0, 2], xmin_abort, xmax_abort)
     hist_plotter(r1['Escape'], axes[0, 3], xmin_escape, xmax_escape)
 
-    hist_plotter(r1_top5['Fit'], axes[1, 0], 0, 0.5)
-    hist_plotter(r1_top5['Nac'], axes[1, 1], xmin_nac, xmax_nac)
-    hist_plotter(r1_top5['Abort'], axes[1, 2], xmin_abort, xmax_abort)
-    hist_plotter(r1['Escape'], axes[1, 3], xmin_escape, xmax_escape)
-
-    hist_plotter(r1_top1['Fit'], axes[2, 0], 0, 0.5)
+    hist_plotter(r1_top1['Fit'], axes[2, 0], 0, 0.25)
     hist_plotter(r1_top1['Nac'], axes[2, 1], xmin_nac, xmax_nac)
     hist_plotter(r1_top1['Abort'], axes[2, 2], xmin_abort, xmax_abort)
     hist_plotter(r1['Escape'], axes[2, 3], xmin_escape, xmax_escape)
 
+    hist_plotter(r1_top01['Fit'], axes[1, 0], 0, 0.25)
+    hist_plotter(r1_top01['Nac'], axes[1, 1], xmin_nac, xmax_nac)
+    hist_plotter(r1_top01['Abort'], axes[1, 2], xmin_abort, xmax_abort)
+    hist_plotter(r1['Escape'], axes[1, 3], xmin_escape, xmax_escape)
+
     # Next 3 rows (Iteration 2)
     hist_plotter(r2['Fit'], axes[3, 0], 0, 1)
     hist_plotter(r2['Nac'], axes[3, 1], 5, 20)
-    hist_plotter(r2['Abort'], axes[3, 2], 1, 10)
-
-    hist_plotter(r2_top5['Fit'], axes[4, 0], 0, 0.15)
-    hist_plotter(r2_top5['Nac'], axes[4, 1], 5, 20)
-    hist_plotter(r2_top5['Abort'], axes[4, 2], 1, 10)
 
     hist_plotter(r2_top1['Fit'], axes[5, 0], 0, 0.15)
     hist_plotter(r2_top1['Nac'], axes[5, 1], 5, 20)
     hist_plotter(r2_top1['Abort'], axes[5, 2], 1, 5)
+    hist_plotter(r2['Abort'], axes[3, 2], 1, 10)
+
+    hist_plotter(r2_top01['Fit'], axes[4, 0], 0, 0.15)
+    hist_plotter(r2_top01['Nac'], axes[4, 1], 5, 20)
+    hist_plotter(r2_top01['Abort'], axes[4, 2], 1, 10)
 
     # Heatmaps
     heatmap(r2, ax=axes[3, 3])
-    heatmap(r2, ax=axes[4, 3], max_value=r2.iloc[top5]['Fit'])
+    heatmap(r2, ax=axes[4, 3], max_value=r2.iloc[top01]['Fit'])
     heatmap(r2, ax=axes[5, 3], max_value=r2.iloc[top1]['Fit'])
 
     # Set titles for the plots
@@ -2413,6 +2161,389 @@ def set_ticks(ax, nr_xticks, nr_yticks=False):
     ax.set_yticks(vals)
 
 
+def ap_to_nac_examples():
+    """
+    Using NAC=10 to take some example AP values for N25 to calculate
+    backstepping rates. To be used for figure demonstrating the parameter
+    estimation process.
+
+            r = nac * ap / (1-ap)
+
+    """
+
+    AP = np.asarray([0.6, 0.4, 0.2, 0.4, 0.3, 0.6, 0.3, 0.2, 0.1, 0.4, 0.1])
+    nac = 10.0
+    backstep = nac * AP / (1 - AP)
+    x_values = range(2, len(AP) + 2)
+
+    fig1, ax1 = plt.subplots()
+
+    ax1.bar(x_values, AP, align='center')
+    ax1.set_ylabel('AP (%)', size=22)
+    ax1.set_xlabel('ITS position', size=22)
+
+    fig2, ax2 = plt.subplots()
+
+    ax2.bar(x_values, backstep, align='center')
+
+    ax2.set_ylabel('Rate constant of backstepping (1/s)', size=22)
+    ax2.set_xlabel('ITS position', size=22)
+
+    for ax in [ax1, ax2]:
+        ax.set_xlim(1, 13)
+        # This is where matplotlib does not shine
+        ax.set_xticks(x_values)
+        set_ticklabel_size(ax, 20)
+
+    ax1.set_ylim(0, 0.7)
+
+    fig1.tight_layout()
+    fig2.tight_layout()
+
+    fig1.savefig(os.path.join(fig_dir, 'APs.pdf'))
+    fig2.savefig(os.path.join(fig_dir, 'Backsteps.pdf'))
+
+
+def set_ticklabel_size(ax, size):
+    for tick in ax.xaxis.get_major_ticks():
+        tick.label.set_fontsize(size)
+
+    for tick in ax.yaxis.get_major_ticks():
+        tick.label.set_fontsize(size)
+
+
+def finegrain_MC():
+    """
+    Boundaries have been found from coarse analysis. Now do more finegrained
+    search.
+    """
+
+    GreB = True
+    fit_extrap = False
+
+    nr_samples = 100000
+
+    import time
+    beg = time.time()
+    boundaries = get_boundaries(analysis='finegrain')
+    result = simulator(GreB, fit_extrap, nr_samples, boundaries)
+    secs_elapsed = time.time() - beg
+    print_time(secs_elapsed)
+
+    db_string = 'finegrain_search-nr_samples_{0}'.format(nr_samples)
+
+    shelve_database = shelve.open(simulation_storage)
+    shelve_database[db_string] = result
+    shelve_database.close()
+
+
+def finegrain_MC_plot():
+    """
+    The good news: you have two parameter value peaks right where you have
+    previously seen them. The bad, or strange, news is that the values at the
+    two peaks do not correspond to each other: choosing NAC values centered around
+    10, you get UAR values around 2. Likewise the other way around.
+
+    So the peaks do not correspond to each other. What would the picture look
+    like if we had disallowed NAC above 15? You get a peak around 1.5 for UAR,
+    which corresponds to a peak around 12/13 for NAC. Paraphrase the other way
+    around: if you have to choose those parameter values that were used
+    together in the simulation, which peak should you choose?
+
+    Also, this was looking at the top 1%. But zooming down in size you don't
+    see much difference. It's all too stochastic at this point.
+    """
+
+    shelve_database = shelve.open(simulation_storage)
+    df = shelve_database['finegrained_mc_samples_10000_rounds_10']
+    shelve_database.close()
+    df.sort_values('Fit', inplace=True)
+
+    fig, axes = plt.subplots(2)
+
+    axN, axA = axes
+
+    df['NAC'].plot(kind='hist', ax=axN, subplots=True, bins=100, normed=True, color='green')
+    df['Abort'].plot(kind='hist', ax=axA, subplots=True, bins=100, normed=True, color='blue')
+
+    #af = df[(3 < df['NAC']) & (df['NAC'] < 15)]
+    #of = af[(1.2 < af['Abort']) & (af['Abort'] < 1.7)]
+    #af = df[:100]
+    #nr_bins_af = int(100 * af.shape[0] / df.shape[0])
+    #af['NAC'].plot(kind='hist', ax=axN, subplots=True, bins=10, normed=True,
+                   #color='yellow')
+    #af['Abort'].plot(kind='hist', ax=axA, subplots=True, bins=10,
+                     #normed=True, color='yellow')
+    #nr_bins_of = int(100 * of.shape[0] / df.shape[0])
+    #of['NAC'].plot(kind='hist', ax=axN, subplots=True, bins=nr_bins_of, normed=True,
+                   #color='red')
+    #of['Abort'].plot(kind='hist', ax=axA, subplots=True, bins=nr_bins_of,
+                     #normed=True, color='red')
+
+    # you need to procuce a some kind of mean value or something.
+
+    for param in ['NAC', 'Abort']:
+        #nr_bins = int(2 * (df[param].max() - df[param].min()))
+        nr_bins = 100  # same as for histogram
+        binning = pd.cut(df[param], nr_bins)
+        bin_counts = pd.value_counts(binning)
+        mode = mean_of_bin_index(bin_counts.index[0])
+        print('Mode for {0}: {1}'.format(param, mode))
+
+    spacingN = (25 - 6) * 0.1
+    axN.set_xlim(6 - spacingN, 25 + spacingN)
+    spacingA = (3 - 1) * 0.1
+    axA.set_xlim(1 - spacingA, 3 + spacingA)
+
+    for ax in axes:
+        ax.set_ylabel('')
+        ax.set_yticklabels([])
+
+    axN.set_xlabel('Rate constant for NAC (1/s)')
+    axA.set_xlabel('Rate constant for UAR (1/s)')
+
+    add_letters((axN, axA), ('A', 'B'), ['UL', 'UL'], shiftY=-0.01, fontsize=14)
+
+    fig.tight_layout()
+
+    file_name = 'high_res_search_for_rate_constants.pdf'
+    file_path = os.path.join(fig_dir, file_name)
+    fig.savefig(file_path, format='pdf')
+
+    plt.close(fig)
+
+
+def mean_of_bin_index(bin_index):
+    """
+    Binning by cut and value_counts gives an index like this:
+
+    ipdb> ga.index[0]
+    '(8.895, 9.0843]'
+
+    Return the mean of that.
+    """
+
+    one, two = bin_index.split(',')
+
+    return np.mean((float(one[1:]), float(two[1:-1])))
+
+
+def simulator(GreB, fit_extrap, nr_samples, boundaries):
+    """
+    The main simulator function.
+    """
+    # Setup
+    variant_name = 'N25'
+    ITSs = data_handler.ReadData('dg100-new')
+    its_variant = [i for i in ITSs if i.name == variant_name][0]
+    initial_RNAP = 100
+    sim_end = 9000
+    escape_RNA_length = 14
+
+    stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
+
+    params = get_parameters(samples=nr_samples, boundaries=boundaries)
+
+    # evaluate parameters and save to log file
+    result = search_parameter_space(True, its_variant, GreB, stoi_setup,
+                                    initial_RNAP, sim_end, params, False)
+
+    return result
+
+
+def get_boundaries(analysis='finegrain'):
+
+    b = {}
+
+    if analysis == 'finegrain':
+        b['nac_low'] = 6
+        b['nac_high'] = 25
+
+        b['abort_low'] = 0.5
+        b['abort_high'] = 3
+
+        b['escape_low'] = 20
+        b['escape_high'] = 20
+
+    return b
+
+
+def get_top_sims(df, fit_extrap, nr_top_sims):
+    """
+    Get the top "nr_top_sims" from a series of simulations. Specify column
+    which indicates what is 'top' and how many should be selected as top.
+    """
+
+    # Set which value which has been optimized for
+    if fit_extrap:
+        fit = 'Fit_extrap'
+    else:
+        fit = 'Fit'
+
+    df.sort(fit, inplace=True)
+    df = df[:nr_top_sims]
+
+    # But drop any rows with NaN values in the Fit column
+    df = df.dropna(subset=[fit])
+
+    return df
+
+
+def scrunch_time_comparison():
+    """
+    Using the obtained rate constants for plotting.
+    """
+
+    params = (10.0, 1.2, 20)
+    variant_name = 'N25'
+    ITSs = data_handler.ReadData('dg100-new')
+    its_variant = [i for i in ITSs if i.name == variant_name][0]
+    initial_RNAP = 100
+    sim_end = 9000
+
+    experiment, extrapolated = get_experiment_scrunch_distribution()
+    stoi_setup = ITStoichiometricSetup(escape_RNA_length=14)
+
+    R = ITRates(its_variant, nac=params[0], unscrunch=params[1],
+                escape=params[2], GreB_AP=True)
+
+    sim_name = get_sim_name(stoi_setup, its_variant)
+    sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end)
+    model = ITModel(sim_setup)
+
+    model_ts = model.run(include_elongation=True)
+    scrunch_dist = calc_scrunch_distribution(model_ts, initial_RNAP)
+    fit, fit_extrap = compare_scrunch_data(scrunch_dist, experiment, extrapolated)
+
+    plot_scrunch_distributions(scrunch_dist, experiment, extrapolated, title='')
+
+
+def fitness_bound_calc():
+    """
+    You obtain a limit for max fitness by running many many simulations. When
+    rerunning say the top 5 or top 10, what fitnesses are you getting the
+    second time around? Does that fitnessing vary for the different parameter
+    ranges?
+
+    Interesting: the top results rarely get a 'repeat'. Would be cool if you
+    could quantify the likelihood of getting a repeat for the different
+    parameter values.
+
+    Result: tops are between 0.04 and 0.05, but when rerunning the median is
+    more than 0.16, so quite a bit worse.
+    """
+
+    shelve_database = shelve.open(simulation_storage)
+    df = shelve_database['finegrained_mc_samples_10000_rounds_10']
+    shelve_database.close()
+    df.sort_values('Fit', inplace=True)
+
+    variant_name = 'N25'
+    ITSs = data_handler.ReadData('dg100-new')
+    its_variant = [i for i in ITSs if i.name == variant_name][0]
+    initial_RNAP = 100
+    sim_end = 9000
+    GreB = True
+    nr_samples = range(100)
+    stoi_setup = ITStoichiometricSetup(escape_RNA_length=14)
+
+    rerun = False
+    if rerun:
+
+        results = []
+        for index, result in df[:10].iterrows():
+            params = [(result['NAC'], result['Abort'], result['Escape']) for _ in nr_samples]
+
+            result = search_parameter_space(True, its_variant, GreB, stoi_setup,
+                                            initial_RNAP, sim_end, params, False,
+                                            False)
+
+            results.append(result)
+
+        all_results = pd.concat(results, ignore_index=True)
+
+        shelve_database = shelve.open(simulation_storage)
+        shelve_database['rerun_top_results'] = all_results
+        shelve_database.close()
+
+    else:
+        shelve_database = shelve.open(simulation_storage)
+        all_results = shelve_database['rerun_top_results']
+        shelve_database.close()
+
+    all_results['Fit'].plot(kind='hist', normed=True, bins=20)
+    plt.savefig('best_results_rerun.pdf')
+    plt.close()
+
+
+def coarse_search():
+    """
+    Coarse search with/without fit_extrap, with/without GreB
+    """
+    import time
+
+    for GreB in [True, False]:
+        for fit_extrap in [True, False]:
+
+            samples = 100000
+            boundaries = False  # defaults to the 1-25 search space
+
+            beg = time.time()
+            result = simulator(GreB, fit_extrap, samples, boundaries)
+            secs_elapsed = time.time() - beg
+            print_time(secs_elapsed)
+
+            db_string = 'coarse_search_nr_samples_{0}-fitextrap_{1}-GreB_{2}'.format(samples,
+                                                                                     fit_extrap,
+                                                                                     GreB)
+            shelve_database = shelve.open(simulation_storage)
+            shelve_database[db_string] = result
+            shelve_database.close()
+
+
+def coarse_search_plot():
+    """
+    Coarse search plots.
+    """
+
+    for fit_extrap in [True, False]:
+
+        shelve_database = shelve.open(simulation_storage)
+        db_string = 'coarse_search_nr_samples_100000-fitextrap_{0}-GreB_True'.format(fit_extrap)
+        df = shelve_database[db_string]
+        shelve_database.close()
+
+        nr_top_sims = 1000
+        df = get_top_sims(df, fit_extrap, nr_top_sims)
+
+        fig, axes = plt.subplots(3)
+        axN, axA, axE = axes
+
+        df['NAC'].plot(kind='hist', ax=axN, subplots=True, bins=50, normed=True, color='green')
+        df['Abort'].plot(kind='hist', ax=axA, subplots=True, bins=50, normed=True, color='blue')
+        df['Escape'].plot(kind='hist', ax=axE, subplots=True, bins=50, normed=True, color='purple')
+
+        for ax in axes:
+            ax.set_ylabel('')
+            ax.set_yticklabels([])
+
+        axN.set_xlabel('Rate constant for NAC (1/s)')
+        axA.set_xlabel('Rate constant for UAR (1/s)')
+        axE.set_xlabel('Rate constant for Escape (1/s)')
+
+        axN.set_xlim(0, 25)
+
+        add_letters(axes, ('A', 'B', 'C'), ['UL', 'UL', 'UL'], shiftY=-0.01, fontsize=14)
+
+        fig.tight_layout()
+
+        file_name = 'coarse_search-fit_extrap_{0}.pdf'.format(fit_extrap)
+        file_path = os.path.join(fig_dir, file_name)
+        fig.savefig(file_path, format='pdf')
+
+        plt.close(fig)
+
+
 def main():
 
     # Distributions of % of IQ units and #RNA
@@ -2421,22 +2552,23 @@ def main():
     # Distributions
     #AP_and_pct_values_distributions_DG100()
 
-    # XXX This was the previous method
-    # Fitting to Revyakin: +/-GreB, iteratively; save the w/mean
-    # and w/std to make a line plot that shows the convergence of the
-    # iterative scheme.
-    #GreBs = [True, False]
-    #GreBs = [False]
-    #GreBs = [True]
-    #for GreB in GreBs:
-        #revyakin_fit_calc(GreB, fit_extrap=True)
-        #revyakin_fit_plot(GreB, fit_extrap=True)
+    # Coarse search
+    coarse_search()
+    #coarse_search_plot()
 
-    # XXX Now using the two-step approach
-    #revyakin_fit_calc_two_step(GreB=True)
+    # Finegrain search
+    #finegrain_MC()
+    #finegrain_MC_plot()
+
     # Obtain the best parameters for N25 +Greb with extra percentages to AP.
     #ap_sensitivity_calc()
     #ap_sensitivity_plot()
+
+    # Plot of model vs measured vs extrapolated scrunch times
+    #scrunch_time_comparison()
+
+    # Rerunning top 10 results to see variation in fitness
+    #fitness_bound_calc()
 
     #tau_variation_plot()
     #fraction_scrunches_less_than_1_second_calc()
@@ -2449,7 +2581,10 @@ def main():
     #plot_sensitivity_analysis()
 
     # Parameter estimation plotting
-    parameter_estimation_plot()
+    #parameter_estimation_plot()
+
+    #ap_to_nac_examples()
+
     pass
 
 
