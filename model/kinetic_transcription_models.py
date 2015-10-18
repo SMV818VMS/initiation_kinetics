@@ -14,7 +14,7 @@ class ITStoichiometricSetup(object):
 
         if unproductive_only and part_unproductive:
             print("Mismatch in unproductive settings")
-            1/0
+            1 / 0
 
         # If this is set, only include the unproductive pathway
         self.unproductive_only = unproductive_only
@@ -94,7 +94,7 @@ def WriteTemplate(productive_open_complex=False,
 
     if len(entries) != 3:
         print("something went wrong here")
-        1/0
+        1 / 0
 
     return state_template.format(*entries)
 
@@ -184,10 +184,10 @@ def BasicITStoichiometry(R, name, s):
 
         else:
             if are_productive:
-                previous_prod = WriteTemplate(rna_len=rna_len-1)
+                previous_prod = WriteTemplate(rna_len=rna_len - 1)
 
             if are_unproductive:
-                previous_unprod = WriteTemplate(rna_len=rna_len-1, unproductive=True)
+                previous_unprod = WriteTemplate(rna_len=rna_len - 1, unproductive=True)
 
         nac_rate = R.Nac()
 
@@ -310,7 +310,7 @@ def SetInitialValues(G, initial_RNAP_prod, initial_RNAP_unprod):
                 initial_productive_found = True
             else:
                 print('Multiple productive initials found!')
-                1/0
+                1 / 0
 
         elif 'initial_node_unproductive' in data:
             if not initial_unproductive_found:
@@ -318,17 +318,17 @@ def SetInitialValues(G, initial_RNAP_prod, initial_RNAP_unprod):
                 initial_unproductive_found = True
             else:
                 print('Multiple unproductive initials found!')
-                1/0
+                1 / 0
         else:
             initial_conditions[node] = 0
 
     if initial_RNAP_prod > 0 and not initial_productive_found:
         print('No initial productive node found!')
-        1/0
+        1 / 0
 
     if initial_RNAP_unprod > 0 and not initial_unproductive_found:
         print('No initial unproductive node found!')
-        1/0
+        1 / 0
 
     return initial_conditions
 
@@ -507,5 +507,3 @@ def write_psc(reactions, initial_values, parameters, graph_name, write_dir):
     handle.close()
 
     return handle.name
-
-

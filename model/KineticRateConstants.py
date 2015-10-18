@@ -21,9 +21,11 @@ class ITRates(object):
         self.custom_AP = custom_AP
         self.GreB_AP = GreB_AP
 
+        self.has_warned_0_AP = False
+
         if (custom_AP is not False) and (GreB_AP is not False):
             print("Can't have both custom AP and GreB AP!")
-            1/0
+            1 / 0
 
         # Ajdust rate constant of backtracking
         self.adjust_ap_each_position = adjust_ap_each_position
@@ -40,18 +42,19 @@ class ITRates(object):
 
         if rna_length < 2:
             print("No AP for RNA < 2nt")
-            1/0
+            1 / 0
 
         if unproductive:
-            ap = self.unproductive_ap[rna_length-2]
+            ap = self.unproductive_ap[rna_length - 2]
         else:
-            ap = self.abortive_prob[rna_length-2]
+            ap = self.abortive_prob[rna_length - 2]
 
         if self.GreB_AP:
-            ap = self.greb_abortive_prob[rna_length-2]
+            ap = self.greb_abortive_prob[rna_length - 2]
 
-        if ap == 0.0:
-            print("Warning: AP is 0 at position {0} for {1}".format(rna_length, self.name))
+        if ap == 0.0 and not self.has_warned_0_AP:
+            #print("Warning: AP is 0 at position {0} for {1}".format(rna_length, self.name))
+            self.has_warned_0_AP = True
 
         if 0 <= ap <= 1:
             return ap
@@ -63,7 +66,7 @@ class ITRates(object):
         # fraction, since we imagine that we have the AP values for the
         # unproductive fraction
         if use_custom_AP:
-            ap = self.custom_AP[rna_length-2]
+            ap = self.custom_AP[rna_length - 2]
         else:
             ap = self._GetAP(rna_length, unproductive)
 
@@ -71,14 +74,14 @@ class ITRates(object):
         if self.adjust_ap_each_position is not False:
             # If AP is already 0 don't do anything.
             if ap > 0:
-                ap = ap + self.adjust_ap_each_position/100.
+                ap = ap + self.adjust_ap_each_position / 100.
                 ap = max(ap, 0)  # in case adjustment leads to below-zero numbers
 
         # Avoid almost dividing by zero for high AP
         if ap > 0.95:
             r = 50
         else:
-            r = self.nac * ap / (1-ap)
+            r = self.nac * ap / (1 - ap)
 
         return r
 
@@ -104,4 +107,3 @@ class ITRates(object):
         Can update custom AP from outside
         """
         self.custom_AP = ap
-
