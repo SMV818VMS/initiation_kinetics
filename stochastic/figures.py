@@ -21,7 +21,6 @@ import matplotlib
 matplotlib.style.use('ggplot')
 from multiprocessing import Pool
 from collections import OrderedDict, defaultdict
-from itertools import product
 from pandas.tools.plotting import scatter_matrix
 
 from ipdb import set_trace as debug  # NOQA
@@ -1179,6 +1178,13 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
     NAC: NAC rate constant
     Abort: unscrunching and abortive release rate constant
     Escape: promoter escape rate constant
+
+    With a high number of simulations memory is becoming an issue. This is
+    because with multiprocessing all model timeseries are being kept in
+    memory. Solution is to move the scrunch distribution calculation inside.
+
+    Or. Better solution is to split the calculation up in digestible pieces.
+    So max 1000 simulations, and then build the dataframe.
     """
 
     # For comparison with experimental
@@ -1188,22 +1194,21 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
     result = defaultdict(list)
 
     if multiproc:
-        pool = Pool(max_proc)
-        results = []
+        result_df = _search_parameter_space_multi(its_variant, GreB,
+                                                  stoi_setup, initial_RNAP,
+                                                  sim_end, params,
+                                                  adjust_ap_each_position)
 
-    for nac, abrt, escape in params:
-        R = ITRates(its_variant, nac=nac, unscrunch=abrt, escape=escape,
-                    GreB_AP=GreB, adjust_ap_each_position=adjust_ap_each_position)
+    else:
+        for nac, abrt, escape in params:
 
-        sim_name = get_sim_name(stoi_setup, its_variant)
-        sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end)
-        model = ITModel(sim_setup)
+            R = ITRates(its_variant, nac=nac, unscrunch=abrt, escape=escape,
+                        GreB_AP=GreB, adjust_ap_each_position=adjust_ap_each_position)
 
-        if multiproc:
-            args = {'include_elongation': True}
-            r = pool.apply_async(model.run, args)
-            results.append(r)
-        else:
+            sim_name = get_sim_name(stoi_setup, its_variant)
+            sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end)
+            model = ITModel(sim_setup)
+
             model_ts = model.run(include_elongation=True)
             scrunch_dist = calc_scrunch_distribution(model_ts, initial_RNAP)
             fit, fit_extrap = compare_scrunch_data(scrunch_dist, experiment, extrapolated)
@@ -1211,11 +1216,53 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
             # Add result
             add_search_result(result, fit, fit_extrap, nac, abrt, escape)
 
-    if multiproc:
+        result_df = pd.DataFrame(result)
+
+    return result_df
+
+
+def _search_parameter_space_multi(its_variant, GreB, stoi_setup,
+                                  initial_RNAP, sim_end, params,
+                                  adjust_ap_each_position):
+
+    """
+    Isolate out the multiproc variant. It would be best to have a class that
+    handles this.
+    """
+    # Split into poolsizes of 100 simulations. Avoids keeping too much in
+    # memory.
+    stepsize = 100
+
+    # For comparison with experimental
+    experiment, extrapolated = get_experiment_scrunch_distribution()
+
+    result = defaultdict(list)
+
+    for start_index in range(0, len(params), stepsize):
+
+        print(start_index)
+
+        subparams = params[start_index:start_index + stepsize]
+
+        results = []
+        pool = Pool(max_proc)
+        for nac, abrt, escape in subparams:
+            R = ITRates(its_variant, nac=nac, unscrunch=abrt, escape=escape,
+                        GreB_AP=GreB, adjust_ap_each_position=adjust_ap_each_position)
+
+            sim_name = get_sim_name(stoi_setup, its_variant)
+            sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end)
+            model = ITModel(sim_setup)
+
+            args = {'include_elongation': True}
+            r = pool.apply_async(model.run, args)
+            results.append(r)
+
         pool.close()
         pool.join()
         model_timeseries = [res.get() for res in results]
-        for ts, pars in zip(model_timeseries, params):
+
+        for ts, pars in zip(model_timeseries, subparams):
             nac, abrt, escape = pars
             scrunch_dist = calc_scrunch_distribution(ts, initial_RNAP)
             fit, fit_extrap = compare_scrunch_data(scrunch_dist, experiment, extrapolated)
@@ -1897,11 +1944,13 @@ def parameter_estimation_plot():
     xmin_escape = r1['Escape'].min()
     xmax_escape = r1['Escape'].max()
 
-    debug()
+    #only_first_iteration_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
+                              #xmin_escape, xmax_escape, r1, r1_top01, r1_top1,
+                              #top1, top01)
 
-    only_first_iteration_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
-                              xmin_escape, xmax_escape, r1, r1_top01, r1_top1,
-                              top1, top01)
+    only_first_iteration_plot_reduced(xmin_nac, xmax_nac, xmin_abort,
+                                      xmax_abort, xmin_escape, xmax_escape,
+                                      r1, r1_top01, r1_top1, top1, top01)
 
     #one_figure_estimation_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
                                #xmin_escape, xmax_escape, r1, r1_top01, r1_top1,
@@ -1911,8 +1960,8 @@ def parameter_estimation_plot():
 
 
 # start adding plots one by one
-def hist_plotter(df, ax, xmin, xmax):
-    df.plot(kind='hist', bins=10, ax=ax, normed=True)
+def hist_plotter(df, ax, xmin, xmax, c, bins=10, normed=True, histtype='bar'):
+    df.plot(kind='hist', bins=bins, ax=ax, normed=normed, color=c)
 
     plt.setp(ax.get_yticklabels(), visible=False)
     ax.set_ylabel('')
@@ -1921,6 +1970,33 @@ def hist_plotter(df, ax, xmin, xmax):
     ax.set_xticks(xticks)
 
     ax.grid(b='off')
+
+
+def only_first_iteration_plot_reduced(xmin_nac, xmax_nac, xmin_abort,
+                                      xmax_abort, xmin_escape, xmax_escape,
+                                      r1, r1_top01, r1_top1, top1, top01):
+
+    # About one A4 page in size for this plot
+    f1, axes = plt.subplots(1, 3, figsize=(8.87, 3.6))
+
+    plot_color = 'gray'
+
+    hist_plotter(r1_top1['Nac'], axes[0], xmin_nac, xmax_nac, plot_color)
+    hist_plotter(r1_top1['Abort'], axes[1], 1, 5, plot_color)
+    hist_plotter(r1_top1['Escape'], axes[2], xmin_escape, xmax_escape, plot_color)
+
+    # Set titles for the plots
+    axes[0].set_xlabel('NAC (1/s)', fontsize=14)
+    axes[1].set_xlabel('Unscrunching and\nabortive release (1/s)',
+                       multialignment='center', fontsize=14)
+    axes[2].set_xlabel('Escape (1/s)', fontsize=14)
+
+    f1.tight_layout()
+
+    file_name = 'reduced_parameter_estimation_distributions_monte_carlo.pdf'
+    file_path = os.path.join(fig_dir, file_name)
+    f1.savefig(file_path, format='pdf')
+    plt.close(f1)
 
 
 def only_first_iteration_plot(xmin_nac, xmax_nac, xmin_abort, xmax_abort,
@@ -2225,12 +2301,14 @@ def finegrain_MC():
 
     import time
     beg = time.time()
-    boundaries = get_boundaries(analysis='finegrain')
+    boundary_analysis = 'finer_grain'
+    boundaries = get_boundaries(analysis=boundary_analysis)
     result = simulator(GreB, fit_extrap, nr_samples, boundaries)
     secs_elapsed = time.time() - beg
     print_time(secs_elapsed)
 
-    db_string = 'finegrain_search-nr_samples_{0}'.format(nr_samples)
+    db_string = 'finegrain_search-nr_samples_{0}_restricted_nac_analysis_{1}'.format(nr_samples,
+                                                                                     boundary_analysis)
 
     shelve_database = shelve.open(simulation_storage)
     shelve_database[db_string] = result
@@ -2254,17 +2332,31 @@ def finegrain_MC_plot():
     see much difference. It's all too stochastic at this point.
     """
 
+    #db_string ='finegrained_mc_samples_10000_rounds_10'  # 1 to 25 for NAC
+    db_string = 'finegrain_search-nr_samples_100000_restricted_nac_analysis_finer_grain'
+
     shelve_database = shelve.open(simulation_storage)
-    df = shelve_database['finegrained_mc_samples_10000_rounds_10']
+    df = shelve_database[db_string]
     shelve_database.close()
+
     df.sort_values('Fit', inplace=True)
 
     fig, axes = plt.subplots(2)
-
     axN, axA = axes
 
-    df['NAC'].plot(kind='hist', ax=axN, subplots=True, bins=100, normed=True, color='green')
-    df['Abort'].plot(kind='hist', ax=axA, subplots=True, bins=100, normed=True, color='blue')
+    #df = df[df['NAC'] < 15]
+    #debug()
+
+    df = df[:1000]
+
+    #nacmin, nacmax = 6, 16
+    #abmin, abmax = 1, 3
+
+    #df['NAC'].plot(kind='hist', ax=axN, subplots=True, bins=100, normed=True, color='green')
+    #df['Abort'].plot(kind='hist', ax=axA, subplots=True, bins=100, normed=True, color='blue')
+    df['NAC'].plot(kind='hist', ax=axN, subplots=True, bins=27, normed=True, color='green')
+    what = df['Abort'].plot(kind='hist', ax=axA, subplots=True, bins=23, normed=True, color='blue')
+    #debug()
 
     #af = df[(3 < df['NAC']) & (df['NAC'] < 15)]
     #of = af[(1.2 < af['Abort']) & (af['Abort'] < 1.7)]
@@ -2290,8 +2382,8 @@ def finegrain_MC_plot():
         mode = mean_of_bin_index(bin_counts.index[0])
         print('Mode for {0}: {1}'.format(param, mode))
 
-    spacingN = (25 - 6) * 0.1
-    axN.set_xlim(6 - spacingN, 25 + spacingN)
+    spacingN = (16 - 6) * 0.1
+    axN.set_xlim(6 - spacingN, 16 + spacingN)
     spacingA = (3 - 1) * 0.1
     axA.set_xlim(1 - spacingA, 3 + spacingA)
 
@@ -2351,13 +2443,23 @@ def simulator(GreB, fit_extrap, nr_samples, boundaries):
     return result
 
 
-def get_boundaries(analysis='finegrain'):
+def get_boundaries(analysis):
 
     b = {}
 
     if analysis == 'finegrain':
         b['nac_low'] = 6
         b['nac_high'] = 25
+
+        b['abort_low'] = 0.5
+        b['abort_high'] = 3
+
+        b['escape_low'] = 20
+        b['escape_high'] = 20
+
+    if analysis == 'finer_grain':
+        b['nac_low'] = 6
+        b['nac_high'] = 16
 
         b['abort_low'] = 0.5
         b['abort_high'] = 3
@@ -2485,9 +2587,19 @@ def coarse_search():
     for GreB in [True, False]:
         for fit_extrap in [True, False]:
 
+            # this combination is not interesting
+            if not GreB and fit_extrap:
+                continue
+
+            # Already done
+            if GreB and fit_extrap:
+                continue
+
             samples = 100000
             boundaries = False  # defaults to the 1-25 search space
 
+            info = 'Running GreB: {0} and Fit_extrap: {1}'.format(GreB, fit_extrap)
+            print('\n' + info + '\n')
             beg = time.time()
             result = simulator(GreB, fit_extrap, samples, boundaries)
             secs_elapsed = time.time() - beg
@@ -2501,47 +2613,320 @@ def coarse_search():
             shelve_database.close()
 
 
-def coarse_search_plot():
+def coarse_search_plot_correct():
     """
-    Coarse search plots.
+    Single 1x3 plot of the three rate constants.
     """
 
-    for fit_extrap in [True, False]:
+    db_string = 'coarse_search_nr_samples_100000-fitextrap_False-GreB_True'
 
-        shelve_database = shelve.open(simulation_storage)
-        db_string = 'coarse_search_nr_samples_100000-fitextrap_{0}-GreB_True'.format(fit_extrap)
-        df = shelve_database[db_string]
-        shelve_database.close()
+    shelve_database = shelve.open(simulation_storage)
 
-        nr_top_sims = 1000
-        df = get_top_sims(df, fit_extrap, nr_top_sims)
+    df_all = shelve_database[db_string]
+    shelve_database.close()
 
-        fig, axes = plt.subplots(3)
-        axN, axA, axE = axes
+    nr_top_sims = 1000
+    df = get_top_sims(df_all, False, nr_top_sims)
 
-        df['NAC'].plot(kind='hist', ax=axN, subplots=True, bins=50, normed=True, color='green')
-        df['Abort'].plot(kind='hist', ax=axA, subplots=True, bins=50, normed=True, color='blue')
-        df['Escape'].plot(kind='hist', ax=axE, subplots=True, bins=50, normed=True, color='purple')
+    fig, axes = plt.subplots(1, 3)
 
-        for ax in axes:
-            ax.set_ylabel('')
-            ax.set_yticklabels([])
+    c = 'gray'
 
-        axN.set_xlabel('Rate constant for NAC (1/s)')
-        axA.set_xlabel('Rate constant for UAR (1/s)')
-        axE.set_xlabel('Rate constant for Escape (1/s)')
+    df['NAC'].plot(kind='hist', ax=axes[0], subplots=True, bins=15,
+                   normed=False, color=c)
+                   #histtype='stepfilled')
 
-        axN.set_xlim(0, 25)
+    df['Abort'].plot(kind='hist', ax=axes[1], subplots=True, bins=30,
+                     normed=False, color=c)
+                     #histtype='stepfilled')
 
-        add_letters(axes, ('A', 'B', 'C'), ['UL', 'UL', 'UL'], shiftY=-0.01, fontsize=14)
+    df['Escape'].plot(kind='hist', ax=axes[2], subplots=True, bins=15,
+                      normed=False, color=c)
+                      #histtype='stepfilled')
 
-        fig.tight_layout()
+    for ax in axes:
+        ax.set_ylabel('')
+        ax.set_yticklabels([])
 
-        file_name = 'coarse_search-fit_extrap_{0}.pdf'.format(fit_extrap)
-        file_path = os.path.join(fig_dir, file_name)
-        fig.savefig(file_path, format='pdf')
+        ax.set_xlim(0, 25)
 
-        plt.close(fig)
+    axes[0].set_xlim(4, 25)
+    axes[1].set_xlim(0, 6)
+
+    axes[0].set_xlabel('Rate constant for NAC (1/s)')
+    axes[1].set_xlabel('Rate constant for UAR (1/s)')
+    axes[2].set_xlabel('Rate constant for Escape (1/s)')
+
+    # Estimate the mode
+    for param in ['NAC', 'Abort']:
+        #nr_bins = int(2 * (df[param].max() - df[param].min()))
+        nr_bins = 100  # same as for histogram
+        binning = pd.cut(df[param], nr_bins)
+        bin_counts = pd.value_counts(binning)
+        mode = mean_of_bin_index(bin_counts.index[0])
+        print('Mode for {0}: {1}'.format(param, mode))
+
+    fig.tight_layout()
+
+    file_name = 'coarse_search-fits_GreB_no_extrap.pdf'
+    file_path = os.path.join(fig_dir, file_name)
+    fig.savefig(file_path, format='pdf')
+
+    plt.close(fig)
+
+
+def coarse_search_plot_correct_and_finegrain():
+    """
+    Single 1x3 plot of the three rate constants.
+    """
+
+    db_string = 'coarse_search_nr_samples_100000-fitextrap_False-GreB_True'
+    db_string_finegrain = 'finegrain_search-nr_samples_100000_restricted_nac_analysis_finer_grain'
+
+    shelve_database = shelve.open(simulation_storage)
+
+    df_all = shelve_database[db_string]
+    df_all_fg = shelve_database[db_string_finegrain]
+    shelve_database.close()
+
+    nr_top_sims = 1000
+    df = get_top_sims(df_all, False, nr_top_sims)
+    df_fg = get_top_sims(df_all_fg, False, nr_top_sims)
+
+    fig, axes = plt.subplots(2, 3)
+
+    c = 'gray'
+
+    # First row
+    df['NAC'].plot(kind='hist', ax=axes[0, 0], subplots=True, bins=15,
+                   normed=False, color=c)
+
+    df['Abort'].plot(kind='hist', ax=axes[0, 1], subplots=True, bins=30,
+                     normed=False, color=c)
+
+    df['Escape'].plot(kind='hist', ax=axes[0, 2], subplots=True, bins=15,
+                      normed=False, color=c)
+
+    # Second row
+    df_fg['NAC'].plot(kind='hist', ax=axes[1, 0], subplots=True, bins=15,
+                      normed=False, color=c)
+
+    df_fg['Abort'].plot(kind='hist', ax=axes[1, 1], subplots=True, bins=12,
+                        normed=False, color=c)
+
+    axes[-1, -1].axis('off')
+
+    for ax in axes.flat:
+        ax.set_ylabel('')
+        ax.set_yticklabels([])
+
+    axes[0, 0].set_xlim(0, 26)
+    axes[0, 1].set_xlim(0, 6)
+    axes[0, 2].set_xlim(0, 26)
+    axes[1, 0].set_xlim(4, 17)
+    axes[1, 1].set_xlim(0.5, 3)
+
+    axes[0, 0].set_xlabel('Rate constant for NAC (1/s)')
+    axes[1, 0].set_xlabel('Rate constant for NAC (1/s)')
+    axes[0, 1].set_xlabel('Rate constant for UAR (1/s)')
+    axes[1, 1].set_xlabel('Rate constant for UAR (1/s)')
+    axes[0, 2].set_xlabel('Rate constant for Escape (1/s)')
+
+    # Estimate the mode
+    for d in [df, df_fg]:
+        for param in ['NAC', 'Abort']:
+            #nr_bins = int(2 * (df[param].max() - df[param].min()))
+            nr_bins = 15  # same as for histogram
+            binning = pd.cut(d[param], nr_bins)
+            bin_counts = pd.value_counts(binning)
+            mode = mean_of_bin_index(bin_counts.index[0])
+            print('Mode for {0}: {1}'.format(param, mode))
+
+    topleft = axes[0, 0]
+    botleft = axes[1, 0]
+    add_letters([topleft, botleft], ('A', 'B'), ['UL', 'UL'], fontsize=14,
+                shiftX=-0.1, shiftY=0.03)
+
+    fig.tight_layout()
+
+    file_name = 'coarse_and_finegrain_search_GreB_no_extrap.pdf'
+    file_path = os.path.join(fig_dir, file_name)
+    fig.savefig(file_path, format='pdf')
+
+    plt.close(fig)
+
+
+def coarse_search_plot_tests():
+    """
+    Coarse search plots. Showing the effect of not using GreB, and of using
+    the extrapolated fit.
+    """
+
+    # Plot these two after one another.
+    db_string0 = 'coarse_search_nr_samples_100000-fitextrap_False-GreB_True'
+    db_string1 = 'coarse_search_nr_samples_100000-fitextrap_True-GreB_True'
+    db_string2 = 'coarse_search_nr_samples_100000-fitextrap_False-GreB_False'
+
+    shelve_database = shelve.open(simulation_storage)
+
+    df0 = shelve_database[db_string0]
+    df1 = shelve_database[db_string1]
+    df2 = shelve_database[db_string2]
+    shelve_database.close()
+
+    nr_top_sims = 1000
+    df0 = get_top_sims(df0, False, nr_top_sims)
+    df1 = get_top_sims(df1, True, nr_top_sims)
+    df2 = get_top_sims(df2, False, nr_top_sims)
+
+    fig, axes = plt.subplots(1, 3)
+
+    df0['NAC'].plot(kind='hist', ax=axes[0], subplots=True, bins=20,
+                    normed=False, color='blue', alpha=0.5, histtype='step')
+    df0['Abort'].plot(kind='hist', ax=axes[1], subplots=True, bins=20,
+                      normed=False, color='blue', alpha=0.5, histtype='step')
+    df0['Escape'].plot(kind='hist', ax=axes[2], subplots=True, bins=20,
+                       normed=False, color='blue', alpha=0.5, histtype='step')
+
+    df1['NAC'].plot(kind='hist', ax=axes[0], subplots=True, bins=20,
+                    normed=False, color='green', alpha=0.5, histtype='stepfilled')
+    df1['Abort'].plot(kind='hist', ax=axes[1], subplots=True, bins=5,
+                      normed=False, color='green', alpha=0.5, histtype='stepfilled')
+    df1['Escape'].plot(kind='hist', ax=axes[2], subplots=True, bins=20,
+                       normed=False, color='green', alpha=0.5, histtype='stepfilled')
+
+    df2['NAC'].plot(kind='hist', ax=axes[0], subplots=True, bins=15,
+                    normed=False, color='purple', alpha=0.5, histtype='stepfilled')
+    df2['Abort'].plot(kind='hist', ax=axes[1], subplots=True, bins=10,
+                      normed=False, color='purple', alpha=0.5, histtype='stepfilled')
+    df2['Escape'].plot(kind='hist', ax=axes[2], subplots=True, bins=20,
+                       normed=False, color='purple', alpha=0.5, histtype='stepfilled')
+
+    for ax in axes:
+        ax.set_ylabel('')
+        ax.set_yticklabels([])
+        ax.set_xlim(0, 25)
+
+        tickpos = [int(_) for _ in np.linspace(0, 25, 3)]
+        ax.set_xticks(tickpos)
+
+    axes[0].set_xlim(5, 25)
+    axes[0].set_xticks(np.linspace(5, 25, 3))
+
+    axes[0].set_xlabel('Rate constant NAC (1/s)')
+    axes[1].set_xlabel('Rate constant UAR (1/s)')
+    axes[2].set_xlabel('Rate constant Escape (1/s)')
+
+    for df, label in zip([df1, df2], ['Fitextrap', 'GreB False']):
+        for param in ['NAC', 'Abort']:
+            nr_bins = 20  # same as for histogram
+            binning = pd.cut(df[param], nr_bins)
+            bin_counts = pd.value_counts(binning)
+            mode = mean_of_bin_index(bin_counts.index[0])
+            print('Mode for {0} {2}: {1}'.format(param, mode, label))
+
+    # Figure out how to make this small enough (one biochem-width -- or spend
+    # a two-rows on this? Important figure.
+    set_fig_size(fig, biochemistry_width * 2, 5.5)
+
+    fig.tight_layout()
+
+    file_name = 'coarse_search-fits.pdf'
+    file_path = os.path.join(fig_dir, file_name)
+    fig.savefig(file_path, format='pdf')
+
+    plt.close(fig)
+
+
+def kinetic_scheme(nac=9, uar=1.2, escape=20):
+    """
+    Use template SVG file to insert rate constants for the two cases, GreB+
+    and GreB-.
+
+    Then run inkscape via command line to generate pdf from svg.
+    """
+    variant_name = 'N25'
+    its_variant = get_variant(variant_name)
+
+    Rp = ITRates(its_variant, nac=nac, unscrunch=uar, escape=escape, GreB_AP=True)
+    Rm = ITRates(its_variant, nac=nac, unscrunch=uar, escape=escape, GreB_AP=False)
+
+    rates = {}
+    rates['GreB_plus'] = [format(Rp.Backtrack(n), '.1f') for n in range(2, 12)]
+    rates['GreB_minus'] = [format(Rm.Backtrack(n), '.1f') for n in range(2, 12)]
+
+    new_svg = kinetic_svg_edit(rates)
+
+    ildir, ilname, ilext = getdirnamext(new_svg)
+    new_pdf = os.path.join(ildir, ilname + '.pdf')
+
+    from subprocess import call
+    cmd = 'inkscape -A {0} {1}'.format(new_pdf, new_svg)
+    call(cmd, shell=True)
+
+
+def getdirnamext(path):
+    dirname = os.path.dirname(path)
+    basename = os.path.basename(path)
+    filename, extension = os.path.splitext(basename)
+
+    return dirname, filename, extension
+
+
+def kinetic_svg_edit(rates):
+    """
+    Open template svg figure and insert appropriate rate constants.
+    """
+
+    ildir = '/home/jorgsk/Dropbox/The-Tome/my_papers/kinetic_initiation/illustrations'
+
+    template = os.path.join(ildir, 'estimated_parameters_template.svg')
+    outfile = os.path.join(ildir, 'estimated_parameters_filled.svg')
+
+    outhandle = open(outfile, 'w')
+
+    for line in open(template, 'r'):
+
+        backtrack_gBp_found = False
+        backtrack_gBm_found = False
+        nac_found = False
+        uar_found = False
+
+        # Update backtrack-rc, both GreB+ and GreB-
+        for val in range(2, 12):
+            placeholder_gBp = 'B{0} s'.format(val)
+            if placeholder_gBp in line:
+                if backtrack_gBp_found is True:
+                    1 / 0  # should only happen once per line
+                rate = rates['GreB_plus'][val - 2]
+                outline = line.replace(placeholder_gBp, '{0} s'.format(rate))
+                backtrack_gBp_found = True
+
+            placeholder_gBm = 'C{0} s'.format(val)
+            if placeholder_gBm in line:
+                if backtrack_gBm_found is True:
+                    1 / 0  # should only happen once per line
+                rate = rates['GreB_minus'][val - 2]
+                outline = line.replace(placeholder_gBm, '{0} s'.format(rate))
+                backtrack_gBm_found = True
+
+        # Update NAC-rc
+        if 'NAC s' in line:
+            outline = line.replace('NAC s', '9 s')
+            nac_found = True
+
+        if 'UAR s' in line:
+            outline = line.replace('UAR s', '1.2 s')
+            uar_found = True
+
+        # Don't change line
+        if not backtrack_gBp_found and not backtrack_gBm_found and not nac_found and not uar_found:
+            outline = line
+
+        outhandle.write(outline)
+    outhandle.close()
+
+    return outfile
 
 
 def main():
@@ -2552,13 +2937,17 @@ def main():
     # Distributions
     #AP_and_pct_values_distributions_DG100()
 
-    # Coarse search
-    coarse_search()
-    #coarse_search_plot()
+    # Coarse search with/withot GreB/extrapolated
+    #coarse_search()
+    #coarse_search_plot_correct()  # GreB, not extrapolated
+    coarse_search_plot_tests()    # Not GreB, and extrapolated
+    #coarse_search_plot_correct_and_finegrain()  # both initial and finegrain search
 
     # Finegrain search
     #finegrain_MC()
     #finegrain_MC_plot()
+    # XXX TODO: Make a (2,3) plot with [coarse, fine]. Discard the old 'red'
+    # data, and use the new ones you got from coarse search.
 
     # Obtain the best parameters for N25 +Greb with extra percentages to AP.
     #ap_sensitivity_calc()
@@ -2584,6 +2973,9 @@ def main():
     #parameter_estimation_plot()
 
     #ap_to_nac_examples()
+
+    # kinetic scheme figure +/- GreB
+    #kinetic_scheme(nac=9, uar=1.2, escape=20)
 
     pass
 
