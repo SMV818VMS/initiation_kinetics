@@ -1071,7 +1071,7 @@ def plot_parameter_scatter_matrix(log_name):
         plt.close()
 
 
-def add_letters(axes, letters, positions, shiftX=0, shiftY=0, fontsize=12):
+def add_letters(axes, letters='auto', positions='auto', shiftX=0, shiftY=0, fontsize=12):
     """
     letters = ('A', 'B') will add A and B to the subplots at positions ('UL
     for example')
@@ -1079,6 +1079,13 @@ def add_letters(axes, letters, positions, shiftX=0, shiftY=0, fontsize=12):
 
     xy = {'x': {'UL': 0.01, 'UR': 0.85},
           'y': {'UL': 0.98, 'UR': 0.97}}
+    
+
+    if letters == 'auto':
+        letters = list('ABCDEFGHIJKLMNOPQRSTUVW')[:len(axes)]
+
+    if positions == 'auto':
+        positions = ['UL' for _ in range(len(axes))]
 
     for pos, label, ax in zip(positions, letters, axes):
         ax.text(xy['x'][pos] + shiftX,
@@ -1202,14 +1209,9 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
     else:
         for nac, abrt, escape in params:
 
-            R = ITRates(its_variant, nac=nac, unscrunch=abrt, escape=escape,
-                        GreB_AP=GreB, adjust_ap_each_position=adjust_ap_each_position)
+            model_ts = get_timeseries(its_variant, initial_RNAP, stoi_setup,
+                                      params, GreB, sim_end)
 
-            sim_name = get_sim_name(stoi_setup, its_variant)
-            sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end)
-            model = ITModel(sim_setup)
-
-            model_ts = model.run(include_elongation=True)
             scrunch_dist = calc_scrunch_distribution(model_ts, initial_RNAP)
             fit, fit_extrap = compare_scrunch_data(scrunch_dist, experiment, extrapolated)
 
@@ -1426,7 +1428,7 @@ def get_sim_name(stoi_setup, its_name):
     return sim_name
 
 
-def get_parameters(samples=10, boundaries=False):
+def get_parameters(samples=10, fixed_boundaries=False):
     """
     For Revyakin data you got a similar result for stepwise and uniform
     parameter sampling.
@@ -1436,7 +1438,7 @@ def get_parameters(samples=10, boundaries=False):
     from numpy.random import uniform
 
     # Initial run
-    if boundaries is False:
+    if fixed_boundaries is False:
         nac_low = 1
         nac_high = 25
 
@@ -1447,14 +1449,14 @@ def get_parameters(samples=10, boundaries=False):
         escape_high = 25
 
     else:
-        nac_low = max(boundaries['nac_low'], 2)
-        nac_high = min(boundaries['nac_high'], 25)
+        nac_low = max(fixed_boundaries['nac_low'], 2)
+        nac_high = min(fixed_boundaries['nac_high'], 25)
 
-        abort_low = max(boundaries['abort_low'], 1)
-        abort_high = min(boundaries['abort_high'], 25)
+        abort_low = max(fixed_boundaries['abort_low'], 1)
+        abort_high = min(fixed_boundaries['abort_high'], 25)
 
-        escape_low = max(boundaries['escape_low'], 2)
-        escape_high = min(boundaries['escape_high'], 25)
+        escape_low = max(fixed_boundaries['escape_low'], 2)
+        escape_high = min(fixed_boundaries['escape_high'], 25)
 
     params = []
     # Uniform sampling
@@ -2355,7 +2357,7 @@ def finegrain_MC_plot():
     #df['NAC'].plot(kind='hist', ax=axN, subplots=True, bins=100, normed=True, color='green')
     #df['Abort'].plot(kind='hist', ax=axA, subplots=True, bins=100, normed=True, color='blue')
     df['NAC'].plot(kind='hist', ax=axN, subplots=True, bins=27, normed=True, color='green')
-    what = df['Abort'].plot(kind='hist', ax=axA, subplots=True, bins=23, normed=True, color='blue')
+    df['Abort'].plot(kind='hist', ax=axA, subplots=True, bins=23, normed=True, color='blue')
     #debug()
 
     #af = df[(3 < df['NAC']) & (df['NAC'] < 15)]
@@ -2434,7 +2436,7 @@ def simulator(GreB, fit_extrap, nr_samples, boundaries):
 
     stoi_setup = ITStoichiometricSetup(escape_RNA_length=escape_RNA_length)
 
-    params = get_parameters(samples=nr_samples, boundaries=boundaries)
+    params = get_parameters(samples=nr_samples, fixed_boundaries=boundaries)
 
     # evaluate parameters and save to log file
     result = search_parameter_space(True, its_variant, GreB, stoi_setup,
@@ -2503,8 +2505,25 @@ def scrunch_time_comparison():
     initial_RNAP = 100
     sim_end = 9000
 
-    experiment, extrapolated = get_experiment_scrunch_distribution()
+    GreB = True
+
     stoi_setup = ITStoichiometricSetup(escape_RNA_length=14)
+
+    model_ts = get_timeseries(its_variant, initial_RNAP, stoi_setup, params, GreB, sim_end)
+
+    scrunch_dist = calc_scrunch_distribution(model_ts, initial_RNAP)
+
+    experiment, extrapolated = get_experiment_scrunch_distribution()
+    fit, fit_extrap = compare_scrunch_data(scrunch_dist, experiment, extrapolated)
+
+    plot_scrunch_distributions(scrunch_dist, experiment, extrapolated, title='')
+
+
+def get_timeseries(its_variant, initial_RNAP, stoi_setup, params, GreB,
+                   sim_end):
+    """
+    params (nac, unscrunch, escape)
+    """
 
     R = ITRates(its_variant, nac=params[0], unscrunch=params[1],
                 escape=params[2], GreB_AP=True)
@@ -2514,10 +2533,8 @@ def scrunch_time_comparison():
     model = ITModel(sim_setup)
 
     model_ts = model.run(include_elongation=True)
-    scrunch_dist = calc_scrunch_distribution(model_ts, initial_RNAP)
-    fit, fit_extrap = compare_scrunch_data(scrunch_dist, experiment, extrapolated)
 
-    plot_scrunch_distributions(scrunch_dist, experiment, extrapolated, title='')
+    return model_ts
 
 
 def fitness_bound_calc():
@@ -2660,7 +2677,7 @@ def coarse_search_plot_correct():
     # Estimate the mode
     for param in ['NAC', 'Abort']:
         #nr_bins = int(2 * (df[param].max() - df[param].min()))
-        nr_bins = 100  # same as for histogram
+        nr_bins = 20  # same as for histogram
         binning = pd.cut(df[param], nr_bins)
         bin_counts = pd.value_counts(binning)
         mode = mean_of_bin_index(bin_counts.index[0])
@@ -2756,10 +2773,107 @@ def coarse_search_plot_correct_and_finegrain():
     plt.close(fig)
 
 
-def coarse_search_plot_tests():
+def coarse_search_plot_tests_2_3():
     """
     Coarse search plots. Showing the effect of not using GreB, and of using
     the extrapolated fit.
+
+    It's getting tedious to change between (1,3) and (3,3)
+    """
+
+    # Plot these two after one another.
+    db_string0 = 'coarse_search_nr_samples_100000-fitextrap_False-GreB_True'
+    db_string1 = 'coarse_search_nr_samples_100000-fitextrap_True-GreB_True'
+    db_string2 = 'coarse_search_nr_samples_100000-fitextrap_False-GreB_False'
+
+    shelve_database = shelve.open(simulation_storage)
+
+    df0 = shelve_database[db_string0]
+    df1 = shelve_database[db_string1]
+    df2 = shelve_database[db_string2]
+    shelve_database.close()
+
+    nr_top_sims = 1000
+    df0 = get_top_sims(df0, False, nr_top_sims)
+    df1 = get_top_sims(df1, True, nr_top_sims)
+    df2 = get_top_sims(df2, False, nr_top_sims)
+
+    fig, axes = plt.subplots(2, 3)
+
+    ht0 = 'bar'
+    #ht1 = 'stepfilled'
+
+    c1 = 'gray'
+    c2 = 'gray'
+
+    for row in [0, 1]:
+        df0['NAC'].plot(kind='hist', ax=axes[row, 0], subplots=True, bins=20,
+                        normed=False, color='gray', alpha=0.5, histtype='step')
+        df0['Abort'].plot(kind='hist', ax=axes[row, 1], subplots=True, bins=20,
+                          normed=False, color='gray', alpha=0.5, histtype='step')
+        df0['Escape'].plot(kind='hist', ax=axes[row, 2], subplots=True, bins=20,
+                           normed=False, color='gray', alpha=0.5, histtype='step')
+
+    df1['NAC'].plot(kind='hist', ax=axes[0, 0], subplots=True, bins=20,
+                    normed=False, color=c1, alpha=0.8, histtype=ht0)
+    df1['Abort'].plot(kind='hist', ax=axes[0, 1], subplots=True, bins=5,
+                      normed=False, color=c1, alpha=0.8, histtype=ht0)
+    df1['Escape'].plot(kind='hist', ax=axes[0, 2], subplots=True, bins=20,
+                       normed=False, color=c1, alpha=0.8, histtype=ht0)
+
+    df2['NAC'].plot(kind='hist', ax=axes[1, 0], subplots=True, bins=15,
+                    normed=False, color=c2, alpha=0.8, histtype=ht0)
+    df2['Abort'].plot(kind='hist', ax=axes[1, 1], subplots=True, bins=10,
+                      normed=False, color=c2, alpha=0.8, histtype=ht0)
+    df2['Escape'].plot(kind='hist', ax=axes[1, 2], subplots=True, bins=20,
+                       normed=False, color=c2, alpha=0.8, histtype=ht0)
+
+    for ax in axes.flat:
+        ax.set_ylabel('')
+        ax.set_yticklabels([])
+        ax.set_xlim(0, 25)
+
+        tickpos = [int(_) for _ in np.linspace(0, 25, 3)]
+        ax.set_xticks(tickpos)
+
+    axes[0, 0].set_xlim(5, 25)
+    axes[1, 0].set_xlim(5, 25)
+    axes[0, 0].set_xticks(np.linspace(5, 25, 3))
+    axes[1, 0].set_xticks(np.linspace(5, 25, 3))
+
+    axes[1, 0].set_xlabel('Rate constant NAC (1/s)')
+    axes[1, 1].set_xlabel('Rate constant UAR (1/s)')
+    axes[1, 2].set_xlabel('Rate constant Escape (1/s)')
+
+    for df, label in zip([df1, df2], ['Fitextrap', 'GreB False']):
+        for param in ['NAC', 'Abort']:
+            nr_bins = 20  # same as for histogram
+            binning = pd.cut(df[param], nr_bins)
+            bin_counts = pd.value_counts(binning)
+            mode = mean_of_bin_index(bin_counts.index[0])
+            print('Mode for {0} {2}: {1}'.format(param, mode, label))
+
+    # Figure out how to make this small enough (one biochem-width -- or spend
+    # a two-rows on this? Important figure.
+    set_fig_size(fig, biochemistry_width * 2, 5.5)
+
+    add_letters([axes[0, 0], axes[1, 0]], shiftX=-0.1, shiftY=0, fontsize=12)
+
+    fig.tight_layout()
+
+    file_name = 'coarse_search-fits_2_3.pdf'
+    file_path = os.path.join(fig_dir, file_name)
+    fig.savefig(file_path, format='pdf')
+
+    plt.close(fig)
+
+
+def coarse_search_plot_tests_1_3():
+    """
+    Coarse search plots. Showing the effect of not using GreB, and of using
+    the extrapolated fit.
+
+    It's getting tedious to change between (1,3) and (3,3)
     """
 
     # Plot these two after one another.
@@ -2929,6 +3043,28 @@ def kinetic_svg_edit(rates):
     return outfile
 
 
+def transcription_trajectories():
+    """
+    Plot 10 transcription trajectories of GreB+ and GreB- on the same plot,
+    illustrating the difference in time until abortive release.
+    """
+
+    params = (10.0, 1.2, 20)
+    variant_name = 'N25'
+    ITSs = data_handler.ReadData('dg100-new')
+    its_variant = [i for i in ITSs if i.name == variant_name][0]
+    initial_RNAP = 100
+    sim_end = 9000
+
+    GreB = True
+
+    stoi_setup = ITStoichiometricSetup(escape_RNA_length=14)
+
+    model_ts = get_timeseries(its_variant, initial_RNAP, stoi_setup, params, GreB, sim_end)
+
+    # XXX MAKE PLOT
+
+
 def main():
 
     # Distributions of % of IQ units and #RNA
@@ -2940,14 +3076,12 @@ def main():
     # Coarse search with/withot GreB/extrapolated
     #coarse_search()
     #coarse_search_plot_correct()  # GreB, not extrapolated
-    coarse_search_plot_tests()    # Not GreB, and extrapolated
+    coarse_search_plot_tests_2_3()    # Not GreB, and extrapolated
     #coarse_search_plot_correct_and_finegrain()  # both initial and finegrain search
 
     # Finegrain search
     #finegrain_MC()
     #finegrain_MC_plot()
-    # XXX TODO: Make a (2,3) plot with [coarse, fine]. Discard the old 'red'
-    # data, and use the new ones you got from coarse search.
 
     # Obtain the best parameters for N25 +Greb with extra percentages to AP.
     #ap_sensitivity_calc()
@@ -2976,6 +3110,9 @@ def main():
 
     # kinetic scheme figure +/- GreB
     #kinetic_scheme(nac=9, uar=1.2, escape=20)
+
+    # GreB+/- trajectories
+    transcription_trajectories()
 
     pass
 
