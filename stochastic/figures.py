@@ -3047,6 +3047,15 @@ def transcription_trajectories():
     """
     Plot 10 transcription trajectories of GreB+ and GreB- on the same plot,
     illustrating the difference in time until abortive release.
+
+    When including the full length ones it's not very visual:
+
+    idea: include only the abortive ones, and make a histogram in the
+    background that separates GreB + and GreB -.
+
+    Actually, the plots are not very good. That's disappointing. Perhaps you
+    can plot an example abortive cycle? You could use Jet or something to
+    color-code the cycle number.
     """
 
     params = (10.0, 1.2, 20)
@@ -3055,34 +3064,45 @@ def transcription_trajectories():
     its_variant = [i for i in ITSs if i.name == variant_name][0]
     initial_RNAP = 1
     sim_end = 9000
-
-    GreB = True
-
     stoi_setup = ITStoichiometricSetup(escape_RNA_length=14)
 
-    # issue with unreleased and single-molecule
-    ts = get_timeseries(its_variant, initial_RNAP, stoi_setup, params, GreB,
-                        sim_end, kind='unreleased')
-    #ts = get_timeseries(its_variant, initial_RNAP, stoi_setup, params,
-                              #GreB, sim_end, kind='aborted')
-
-    # You expect sveral iterations but see only 1
-    print(ts['rna_2'].sum())
-
-    # XXX MAKE PLOT
     fig, ax = plt.subplots()
-    # You can get single trajectories fast. You should make a method that adds
-    # each single-run to a plot. Find a way of showing the different abortive
-    # iterations.
-    # Since most abortive happens with RNA=2, start trajectories with RNA_3 to
-    # avoid excessive noise (but make the method general enough to capture
-    # RNA_3 too).
-    trajectories = extract_trajectories(ts)
 
-    debug()
+    col = {True: 'g', False: 'b'}
+
+    for GreB in [True, False]:
+
+        all_trajs = []
+
+        for _ in range(50):
+            ts = get_timeseries(its_variant, initial_RNAP, stoi_setup, params, GreB,
+                                sim_end, kind='unreleased')
+            #ts = get_timeseries(its_variant, initial_RNAP, stoi_setup, params,
+                                      #GreB, sim_end, kind='aborted')
+
+            trajs = extract_trajectories(ts, fl=False)
+
+            all_trajs.append(trajs)
+
+        #sum([[1,2], [1,2]]) does not work but sum[[1,2], [1,2], []) does. By
+        #specifying the 'start' 'value' [] it's OK.
+        trajectories = sum(all_trajs, [])
+
+        color = col[GreB]
+
+        for (y, t) in trajectories:
+
+            if len(y) != len(t):
+                debug()
+            print((y, t))
+            ax.plot(t, y, drawstyle='steps-post', c=color)
+
+        fig.savefig('wha_Greb_equals_{0}.png'.format(GreB))
+
+        plt.close(fig)
 
 
-def extract_trajectories(ts):
+def extract_trajectories(ts, fl=True):
     """
     Logic: for starts, check if rna_4[start+1] is nonzero, if so, plot. Then
     use the closest stop-1 to indicate the last coordinate.
@@ -3101,8 +3121,9 @@ def extract_trajectories(ts):
     if len(stops) == 0:
         stop_idx = ts['rna_11'].values.argmax()
         y = range(3, 12)
-        t = ts.index[starts[0]:stop_idx]
-        trajs.append((y, t))
+        t = ts.index[starts[0]:stop_idx + 1]
+        if fl:
+            trajs.append((y, t - t[0]))  # normalize time
 
     else:
         for start in starts:
@@ -3110,17 +3131,22 @@ def extract_trajectories(ts):
             if (ts['rna_3'].iloc[start] == 1) and (ts['rna_4'].iloc[start + 1] == 1):
                 # check for the last trajectory which goes to FL
                 if start > stops[-1]:
-                    stop_idx = ts['rna_11'].values.argmax()
-                    stop_rna = ts.iloc[stop_idx].argmax()
-                    t = ts.index[start:stop_idx + 1]
+                    stop_idx = ts['rna_12'].values.argmax()  # at 12 there is no turning back
+                    stop_rna = ts.iloc[stop_idx - 1].argmax()
                 else:
                     _stop_idx = np.argmax(stops > start)
                     stop_idx = stops[_stop_idx]
                     stop_rna = ts.iloc[stop_idx - 1].argmax()
-                    t = ts.index[start:stop_idx]
+
                 stop_rna = int(stop_rna.split('_')[1])
+                t = ts.index[start:stop_idx]
                 y = range(3, stop_rna + 1)
-                trajs.append((y, t))
+
+                # skip the full length trajectories by option
+                if not fl and stop_rna == 11:
+                    continue
+                else:
+                    trajs.append((y, t - t[0]))  # normalize time
             else:
                 pass
 
