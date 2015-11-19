@@ -2520,7 +2520,7 @@ def scrunch_time_comparison():
 
 
 def get_timeseries(its_variant, initial_RNAP, stoi_setup, params, GreB,
-                   sim_end):
+                   sim_end, kind='aborted'):
     """
     params (nac, unscrunch, escape)
     """
@@ -2532,7 +2532,7 @@ def get_timeseries(its_variant, initial_RNAP, stoi_setup, params, GreB,
     sim_setup = ITSimulationSetup(sim_name, R, stoi_setup, initial_RNAP, sim_end)
     model = ITModel(sim_setup)
 
-    model_ts = model.run(include_elongation=True)
+    model_ts = model.run(include_elongation=True, kind=kind)
 
     return model_ts
 
@@ -3053,19 +3053,89 @@ def transcription_trajectories():
     variant_name = 'N25'
     ITSs = data_handler.ReadData('dg100-new')
     its_variant = [i for i in ITSs if i.name == variant_name][0]
-    initial_RNAP = 100
+    initial_RNAP = 1
     sim_end = 9000
 
     GreB = True
 
     stoi_setup = ITStoichiometricSetup(escape_RNA_length=14)
 
-    model_ts = get_timeseries(its_variant, initial_RNAP, stoi_setup, params, GreB, sim_end)
+    # issue with unreleased and single-molecule
+    ts = get_timeseries(its_variant, initial_RNAP, stoi_setup, params, GreB,
+                        sim_end, kind='unreleased')
+    #ts = get_timeseries(its_variant, initial_RNAP, stoi_setup, params,
+                              #GreB, sim_end, kind='aborted')
+
+    # You expect sveral iterations but see only 1
+    print(ts['rna_2'].sum())
 
     # XXX MAKE PLOT
+    fig, ax = plt.subplots()
+    # You can get single trajectories fast. You should make a method that adds
+    # each single-run to a plot. Find a way of showing the different abortive
+    # iterations.
+    # Since most abortive happens with RNA=2, start trajectories with RNA_3 to
+    # avoid excessive noise (but make the method general enough to capture
+    # RNA_3 too).
+    trajectories = extract_trajectories(ts)
+
+    debug()
+
+
+def extract_trajectories(ts):
+    """
+    Logic: for starts, check if rna_4[start+1] is nonzero, if so, plot. Then
+    use the closest stop-1 to indicate the last coordinate.
+
+    If there is no stop, assume that it went to FL.
+
+    return a set of (y, t) arrays for plotting.
+    """
+
+    # Get start and stop incices for a trajectory
+    starts = ts['rna_3'].nonzero()[0]
+    stops = (ts.sum(axis=1) == 0).nonzero()[0]
+
+    trajs = []
+    # Special case: no abortive initiation
+    if len(stops) == 0:
+        stop_idx = ts['rna_11'].values.argmax()
+        y = range(3, 12)
+        t = ts.index[starts[0]:stop_idx]
+        trajs.append((y, t))
+
+    else:
+        for start in starts:
+            # skip trajectories that start and end with 3-len RNA
+            if (ts['rna_3'].iloc[start] == 1) and (ts['rna_4'].iloc[start + 1] == 1):
+                # check for the last trajectory which goes to FL
+                if start > stops[-1]:
+                    stop_idx = ts['rna_11'].values.argmax()
+                    stop_rna = ts.iloc[stop_idx].argmax()
+                    t = ts.index[start:stop_idx + 1]
+                else:
+                    _stop_idx = np.argmax(stops > start)
+                    stop_idx = stops[_stop_idx]
+                    stop_rna = ts.iloc[stop_idx - 1].argmax()
+                    t = ts.index[start:stop_idx]
+                stop_rna = int(stop_rna.split('_')[1])
+                y = range(3, stop_rna + 1)
+                trajs.append((y, t))
+            else:
+                pass
+
+    return trajs
 
 
 def main():
+    """
+    TDD? Remember those plots that showed identical PY predictions? You should
+    have kept that plot as a test of the functionality. If you did
+    developement in the future (and it seems you nearly always do) and you
+    forget about the internals (like you always do), then having that plot run
+    in the background would be a great test that your model is still
+    performing as you intended.
+    """
 
     # Distributions of % of IQ units and #RNA
     #initial_transcription_stats()
@@ -3076,7 +3146,7 @@ def main():
     # Coarse search with/withot GreB/extrapolated
     #coarse_search()
     #coarse_search_plot_correct()  # GreB, not extrapolated
-    coarse_search_plot_tests_2_3()    # Not GreB, and extrapolated
+    #coarse_search_plot_tests_2_3()    # Not GreB, and extrapolated
     #coarse_search_plot_correct_and_finegrain()  # both initial and finegrain search
 
     # Finegrain search
