@@ -137,14 +137,15 @@ class ITModel(object):
         # Convert data array to int32
         all_ts = np.array(sim.data_stochsim.species, dtype=np.int32)
 
-        # Has this been fixed in 2.3?
+        # In 2.3, you get a proper time-array here
         time = sim.data_stochsim.time
 
-        # v. 2.2
-        # ehy, the time array is weird; maybe a bug?
-        #time = [t[0] for t in sim.data_stochsim.time]
+        # Fix for v 2.2
+        time = [t[0] for t in sim.data_stochsim.time]
 
         data = OrderedDict()
+
+        # Species names are 'rna_2', 'rna_3', etc
         for species in species_names:
 
             ts = self._parse_model_data(species, all_ts, model_names)
@@ -159,11 +160,11 @@ class ITModel(object):
                 print('What?')
                 1 / 0
 
-        df = pd.DataFrame(data=data, index=time)
+        df_full = pd.DataFrame(data=data, index=time)
 
         # Testing what happens when dropping duplicates. This is good for long
         # simulations: you can get a 10-fold decrease in size.
-        df = df.drop_duplicates()
+        df = df_full.drop_duplicates()
 
         return df
 
@@ -191,7 +192,6 @@ class ITModel(object):
         elif nr_names_in_model == 2:
             ts = np.zeros(all_ts.shape[0], dtype=np.int32)
             for model_name in sp2model_name[species]:
-
                 if model_name in model_names:
                     species_simulated = True
                     sp_index = model_names.index(model_name)
@@ -223,9 +223,9 @@ class ITModel(object):
         for nt in range(2, 21):
             key = 'rna_{0}'.format(nt)
             if nt < 10:
-                species = ['RNAP{0}_b'.format(nt), 'RNAP{0}_f'.format(nt)]
+                species = ['RNAP{0}_b'.format(nt), 'RNAP{0}__'.format(nt)]
             else:
-                species = ['RNAP{0}b'.format(nt), 'RNAP{0}f'.format(nt)]
+                species = ['RNAP{0}b'.format(nt), 'RNAP{0}_'.format(nt)]
 
             organizer[key] = species
 
