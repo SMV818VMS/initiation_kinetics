@@ -72,6 +72,8 @@ class ITModel(object):
         self.nr_traj = setup.nr_traj
         self.duration = setup.sim_end
         self.psc_file = setup.model_psc_input
+        self.sp_2_aborted_modname = self._species_2_aborted_model_name()
+        self.sp_2_unreleased_modname = self._species_2_unreleased_model_name()
 
     def calc_setup_hash(self):
 
@@ -99,10 +101,12 @@ class ITModel(object):
 
         sim = self._runStochPy(self.nr_traj, self.duration, self.psc_file)
 
+        ts = self._calc_timeseries(sim, *args, **kwargs)
+
         # clean up: remove temporary file
         self._clean_up()
 
-        return self._calc_timeseries(sim, *args, **kwargs)
+        return ts
 
     def _runStochPy(self, nr_traj, duration, psc_file):
         """
@@ -120,12 +124,18 @@ class ITModel(object):
 
         return mod
 
-    def _calc_timeseries(self, sim, include_elongation=False):
+    def _calc_timeseries(self, sim, include_elongation=False, kind='aborted'):
         """
-        Returns a Pandas dataframe for all RNA species.
+        Returns a Pandas dataframe with a timeseries of RNA species.
+
+        if kind == 'aborted' (default), then the timeseries consists of the
+        total amount of aborted/released RNA.
+
+        if kind == 'unreleased', then the timeseries consists of the total
+        amount of unreleased RNA.
         """
 
-        species_names = ['rna_{0}'.format(i) for i in range(2, 21)] + ['FL']
+        species_names = ['rna_{0}'.format(i) for i in range(1, 21)] + ['FL'] + ['RNAPpoc']
 
         #species_names += ['productive open complex']
         #species_names += ['unproductive open complex']
@@ -139,87 +149,140 @@ class ITModel(object):
 
         # In 2.3, you get a proper time-array here
         time = sim.data_stochsim.time
-
         # Fix for v 2.2
         time = [t[0] for t in sim.data_stochsim.time]
 
         data = OrderedDict()
 
-        # Species names are 'rna_2', 'rna_3', etc
+        if kind == 'aborted':
+            func = self._get_aborted_species
+            mapping = self.sp_2_aborted_modname
+
+        elif kind == 'unreleased':
+            func = self._get_unreleased_species
+            mapping = self.sp_2_unreleased_modname
+
+        else:
+            print('Invalid option')
+            1 / 0
+
+        # Slightly overly complex solution for dealing with getting two
+        # different kinds of timeseries: for aborted ones we have to
+        # accumulate the number of entries into the abortive state, while for
+        # unreleased species we can just use the mode's native timeseries.
         for species in species_names:
+            model_name = mapping[species]
+            # Silently ignore species that were not modelled
+            if model_name in model_names:
+                sp_index = model_names.index(model_name)
+                ts = func(all_ts, sp_index, model_name)
 
-            ts = self._parse_model_data(species, all_ts, model_names)
-            # I know type testing is bad, but how bad is it?
-            # Try/except yeah ...
-            #data[species] = ts
-            if type(ts) is np.ndarray:
-                data[species] = ts
-            elif type(ts) is int:
-                data[species] = np.zeros(len(time), dtype=np.int16)
-            else:
-                print('What?')
-                1 / 0
+                if type(ts) is np.ndarray:
+                    data[species] = ts
+                else:
+                    print('What?')
+                    1 / 0
 
-        df_full = pd.DataFrame(data=data, index=time)
+        df = pd.DataFrame(data=data, index=time)
 
         # Testing what happens when dropping duplicates. This is good for long
         # simulations: you can get a 10-fold decrease in size.
-        df = df_full.drop_duplicates()
+        # XXX but you discovered that this has unintended consequences when
+        # not accumulating, since the row pattern may repeat and then pandas
+        # thinks that the rows are duplicates!
+        if kind == 'aborted':
+            df = df.drop_duplicates()
 
         return df
 
-    def _parse_model_data(self, species, all_ts, model_names):
+    def _get_unreleased_species(self, all_ts, sp_index, model_name):
         """
-        Get the timeseries for the given plot name. This should work regardless of
-        the simulation is with RNAPs that are productive, unproductive, or a combination.
+        Get the timeseries of # unreleased RNA for the given species. This
+        corresponds to native timeseries in the model.
         """
 
-        sp2model_name = self._species_2_model_name()
+        ts = all_ts[:, sp_index]
 
-        # The complexes and FL are associated with only 1 name in th model
-        nr_names_in_model = len(sp2model_name[species])
+        return ts
 
-        species_simulated = False
+    def _get_aborted_species(self, all_ts, sp_index, model_name):
+        """
+        Get the timeseries of # aborted RNA for the given species.
+        """
 
-        if nr_names_in_model == 1:
-            model_name = sp2model_name[species][0]
-            if model_name in model_names:
-                species_simulated = True
-                sp_index = model_names.index(model_name)
-                ts = all_ts[:, sp_index]
+        # Some states are sinks, no need to accumulate
+        sinks = ['productive open complex', 'unproductive open complex',
+                 'elongating complex', 'FL']
 
-        # If Xnt, there are 2 possible names, both productive and unproductive
-        elif nr_names_in_model == 2:
-            ts = np.zeros(all_ts.shape[0], dtype=np.int32)
-            for model_name in sp2model_name[species]:
-                if model_name in model_names:
-                    species_simulated = True
-                    sp_index = model_names.index(model_name)
-                    # Find -change in #species each timestep (+1=aborted RNA, -1=backtracked)
-                    change = all_ts[:-1, sp_index] - all_ts[1:, sp_index]
-                    # Set to zero those values that represent entry into the
-                    # backstepped state
-                    change[change == -1] = 0
-                    # Get timeseries of # abortive RNA
-                    cumul = np.cumsum(change)
-                    # We lose the first timestep. It's anyway impossive to produce an
-                    # abortive RNA in the first timestep. So pad a 0 value to the
-                    # array to make it fit with the time index.
-                    cumul = np.insert(cumul, 0, 0)
-
-                    ts += cumul
-
-        if species_simulated:
-            return ts
+        # Sinks are easy
+        if model_name in sinks:
+            ts = all_ts[:, sp_index]
         else:
-            return -1
+            # For backtracked states, accumulate to find #aborted RNA of reach length
+            #change = all_ts[:, sp_index]
+
+            change = all_ts[1:, sp_index] - all_ts[:-1, sp_index]
+
+            # ignore departures from abortive states
+            change[change == -1] = 0
+
+            # accumulate
+            cumul = np.cumsum(change)
+            # We lose the first timestep. It's anyway impossive to produce an
+            # abortive RNA in the first timestep. So pad a 0 value to the
+            # array to make it fit with the time index.
+            #compensate for first timstep
+            ts = np.insert(cumul, 0, 0)
+
+        return ts
+
+    def _species_2_unreleased_model_name(self):
+
+        d = {}
+        for nt in range(1, 21):
+            key = 'rna_{0}'.format(nt)
+            if nt < 10:
+                species = 'RNAP{0}__'.format(nt)
+            else:
+                species = 'RNAP{0}_'.format(nt)
+
+            d[key] = species
+
+        d['RNAPpoc'] = 'RNAPpoc'
+        d['unproductive open complex'] = 'RNAPuoc'
+        d['elongating complex'] = 'RNAPelc'
+        d['RNAPoc'] = 'RNAPoc'
+        d['FL'] = 'RNAPflt'
+
+        return d
+
+    def _species_2_aborted_model_name(self):
+
+        d = {}
+        for nt in range(1, 21):
+            key = 'rna_{0}'.format(nt)
+            if nt < 10:
+                species = 'RNAP{0}_b'.format(nt)
+            else:
+                species = 'RNAP{0}b'.format(nt)
+
+            d[key] = species
+
+        d['productive open complex'] = 'RNAPpoc'
+        d['unproductive open complex'] = 'RNAPuoc'
+        d['RNAPoc'] = 'RNAPoc'
+        d['RNAPpoc'] = 'RNAPpoc'
+        d['elongating complex'] = 'RNAPelc'
+        d['FL'] = 'RNAPflt'
+
+        return d
 
     def _species_2_model_name(self):
         """
         Mapping between species identifiers (rna_2) and species names in model (RNAP2__)
         """
 
-        organizer = {}
+        d = {}
         for nt in range(2, 21):
             key = 'rna_{0}'.format(nt)
             if nt < 10:
@@ -227,11 +290,11 @@ class ITModel(object):
             else:
                 species = ['RNAP{0}b'.format(nt), 'RNAP{0}_'.format(nt)]
 
-            organizer[key] = species
+            d[key] = species
 
-        organizer['productive open complex'] = ['RNAPpoc']
-        organizer['unproductive open complex'] = ['RNAPuoc']
-        organizer['elongating complex'] = ['RNAPelc']
-        organizer['FL'] = ['RNAPflt']
+        d['productive open complex'] = ['RNAPpoc']
+        d['unproductive open complex'] = ['RNAPuoc']
+        d['elongating complex'] = ['RNAPelc']
+        d['FL'] = ['RNAPflt']
 
-        return organizer
+        return d
