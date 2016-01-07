@@ -17,8 +17,7 @@ from auxiliary import print_time
 import data_handler
 import stochastic_model_run as smr
 import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.style.use('ggplot')
+plt.style.use('seaborn-white')
 from multiprocessing import Pool
 from collections import OrderedDict, defaultdict
 from pandas.tools.plotting import scatter_matrix
@@ -814,31 +813,79 @@ def simple_vo_2003_comparison():
     #greb_plus = greb_plus_model.run()['FL']
     #gp = greb_plus / greb_plus.max()
 
-    f1, ax = plt.subplots()
+    fig, ax = plt.subplots()
     # Get and plot model data
-    greb_minus_model = smr.get_kinetics(variant='N25', GreB=False,
-                                        escape_RNA_length=14,
-                                        initial_RNAP=1000, sim_end=60.5)
-    greb_minus = greb_minus_model.run()['FL']
-    gm = greb_minus / greb_minus.max()
-    gm.plot(ax=ax, color='c')
+    nr_sims = 10
 
-    # Get half-life of FL from model
-    #thalf_grebminus = f_gm(0.5)
-    idx_gm = gm.tolist().index(0.5)
-    thalf_grebminus = gm.index[idx_gm]
+    results = {}
+    HLs = []
 
-    # Plot 2003 data
-    m1.plot(ax=ax, style='.', color='g')
+    # For the merging of multiple simulations, pre-define time-steps which
+    # individual runs will be interpolated to.
+    timesteps = np.arange(0, 100, 1)
+
+    for sim_nr in range(nr_sims):
+        nac, unscrunch, escape = (10.4, 1.3, 20)
+        greb_minus_model = smr.get_kinetics(variant='N25', GreB=False,
+                                            escape_RNA_length=14,
+                                            initial_RNAP=1000, sim_end=60.5,
+                                            nac=nac, unscrunch=unscrunch,
+                                            escape=escape)
+        greb_minus = greb_minus_model.run()['FL']
+        gm = greb_minus / greb_minus.max()
+        #gm.plot(ax=ax, color='c')
+
+        # Get half-life of FL from model
+        #thalf_grebminus = f_gm(0.5)
+        idx_gm = np.searchsorted(gm.values, 0.5)
+        thalf_gm = gm.index[idx_gm]
+
+        # Interpolate to the same timesteps for merging later.
+        results[sim_nr] = np.interp(timesteps, gm.index.values, gm.values)
+        HLs.append(thalf_gm)
+
+    # Get mean and +/- one std of the simulations
+    sims = pd.DataFrame(data=results)
+    sims_mean = sims.mean(axis=1)
+    sims_std = sims.std(axis=1)
+
+    nr_std = 1
+    upper_bound = sims_mean + nr_std * sims_std
+    lower_bound = sims_mean - nr_std * sims_std
+
+    # Get mean and std of half-life
+    thalf_gm_mean = np.mean(HLs)
+    thalf_gm_std = np.std(HLs)
 
     # Fit 2003 data and calculate half life
     xnew, ynew = fit_FL(m1.index, m1.values)
-    fit = pd.DataFrame(data={'Vo et. al': ynew}, index=xnew)
-    fit.plot(ax=ax, color='b')
-
-    # Get the halflife of full length product
     f_vo = interpolate(ynew, xnew, k=1)
     thalf_vo = float(f_vo(0.5))
+
+    ax.plot(timesteps, sims_mean, color='b',
+            label=r'Model Model $t_{{1/2}}={0:.2f} \pm {1:.2f}$'.format(thalf_gm_mean,
+                                                                        thalf_gm_std))
+
+    ax.fill_between(timesteps, upper_bound, lower_bound, color='b', alpha=0.2)
+
+    # Plot 2003 data
+    ax.scatter(m1.index.values, m1.values, marker='s', color='k',
+            label='Vo et al. measurements')
+
+    ax.plot(xnew, ynew, color='c',
+            label=r'Vo et al. fit $t_{{1/2}}={0:.2f}$'.format(thalf_vo))
+
+    ax.legend(loc='lower right', fontsize=20)
+
+    ax.set_xlabel('Time (seconds)', size=20)
+    ax.set_ylabel('Fraction of full length transcript', size=20)
+
+    fig.set_size_inches(9, 9)
+    ax.tick_params(axis='both', labelsize=20)
+
+    ax.set_xlim(0, 70)
+    ax.set_ylim(0, 1.01)
+    fig.savefig(fig_dir + '/GreB_minus_kinetics.pdf')
 
     # XXX looks better without for now
     # Plot and get halflives of GreB+
@@ -851,19 +898,6 @@ def simple_vo_2003_comparison():
               #r'Vo et. al GreB- fit $t_{{1/2}}={0:.2f}$'.format(thalf_vo),
               #r'Simulation GreB- $t_{{1/2}}={0:.2f}$'.format(thalf_grebminus),
               #r'Simulation GreB+ $t_{{1/2}}={0:.2f}$'.format(thalf_grebplus)]
-
-    labels = ['Vo et. al measurements',
-              r'Vo et. al fit $t_{{1/2}}={0:.2f}$'.format(thalf_vo),
-              r'Simulation $t_{{1/2}}={0:.2f}$'.format(thalf_grebminus)]
-
-    ax.legend(labels, loc='lower right', fontsize=15)
-
-    ax.set_xlabel('Time (seconds)', size=15)
-    ax.set_ylabel('Fraction of full length transcript', size=15)
-
-    ax.set_xlim(0, 70)
-    ax.set_ylim(0, 1.01)
-    f1.savefig('GreB_plus_and_GreB_minus_kinetics.pdf')
 
 
 def heatmap(df, fit_name='Fit', ax=False, max_value=False):
@@ -1199,6 +1233,7 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
 
     # Store the results in dict for converting to DataFrame later
     result = defaultdict(list)
+    cumul_probability = np.linspace(1, 1 / float(initial_RNAP), initial_RNAP)
 
     if multiproc:
         result_df = _search_parameter_space_multi(its_variant, GreB,
@@ -1212,7 +1247,7 @@ def search_parameter_space(multiproc, its_variant, GreB, stoi_setup,
             model_ts = get_timeseries(its_variant, initial_RNAP, stoi_setup,
                                       params, GreB, sim_end)
 
-            scrunch_dist = calc_scrunch_distribution(model_ts, initial_RNAP)
+            scrunch_dist = calc_scrunch_distribution(model_ts, cumul_probability)
             fit, fit_extrap = compare_scrunch_data(scrunch_dist, experiment, extrapolated)
 
             # Add result
@@ -1240,6 +1275,8 @@ def _search_parameter_space_multi(its_variant, GreB, stoi_setup,
 
     result = defaultdict(list)
 
+    cumul_probability = np.linspace(1, 1 / float(initial_RNAP), initial_RNAP)
+
     for start_index in range(0, len(params), stepsize):
 
         print(start_index)
@@ -1266,7 +1303,7 @@ def _search_parameter_space_multi(its_variant, GreB, stoi_setup,
 
         for ts, pars in zip(model_timeseries, subparams):
             nac, abrt, escape = pars
-            scrunch_dist = calc_scrunch_distribution(ts, initial_RNAP)
+            scrunch_dist = calc_scrunch_distribution(ts, cumul_probability)
             fit, fit_extrap = compare_scrunch_data(scrunch_dist, experiment, extrapolated)
 
             # Add result
@@ -1277,27 +1314,29 @@ def _search_parameter_space_multi(its_variant, GreB, stoi_setup,
     return result_df
 
 
-def plot_scrunch_distributions(model_scrunches, expt, expt_extrapolated,
-                               title=''):
+def plot_scrunch_distributions(model_runs, expt, expt_extrapolated, title=''):
     """
     Now you are plotting the cumulative distribution function, but can you
     also plot the probability density function? Start off with a histogram.
     """
 
     plot_expt = True
-    fig_dir = 'figures'
 
     expt['cumul_expt'] = 1 - expt['inverse_cumul_experiment']
     expt_extrapolated['cumul_expt_extrap'] = 1 - expt_extrapolated['extrap_inv_cumul']
-    model_scrunches['cumul_model'] = 1 - model_scrunches['inverse_cumul_model']
 
-    # For the model data, insert a 0 to indicate that there is 0 probability
-    # of 0 scrunch time ?
-    dta = {'inverse_cumul_model': 1., 'cumul_model': 0.}
-    index = [0.]
-    extraDF = pd.DataFrame(data=dta, index=index)
+    model_runs.index = 1 - model_runs.index
 
-    model_scrunches = extraDF.append(model_scrunches)
+    # For the model data, set scrunch time to 0 for time 0
+    model_runs.iloc[0] = 0
+
+    run_mean = model_runs.mean(axis=1)
+    run_std = model_runs.std(axis=1)
+    run_probs = model_runs.index.values
+
+    nr_std = 1
+    upper_bound = run_mean + nr_std * run_std
+    lower_bound = run_mean - nr_std * run_std
 
     #for logy in [True, False]:
     for logy in [False]:
@@ -1306,20 +1345,21 @@ def plot_scrunch_distributions(model_scrunches, expt, expt_extrapolated,
         ax.set_xlabel('Time (seconds)', size=20)
         ax.set_ylabel('Probability', size=20)
 
-        model_scrunches.plot(y='cumul_model', ax=ax, logy=logy, fontsize=20,
-                             label='Model')
+        ax.plot(run_mean, run_probs, color='b', label='Model mean')
+
+        ax.fill_betweenx(run_probs, upper_bound, lower_bound, color='b', alpha=0.2)
 
         if plot_expt:
             # Plot experiment as scatter
             ax.scatter(np.asarray(expt.index), expt['cumul_expt'],
-                       label='Measurements')
+                       label='Measurements', marker='s', c='k')
             # Plot extrapolated experiment
             ax.plot(np.asarray(expt_extrapolated.index),
-                    expt_extrapolated['cumul_expt_extrap'], label='Fit to measurements', ls='--')
+                    expt_extrapolated['cumul_expt_extrap'],
+                    label='Fit and extrapolation of measurements', ls='--')
 
         f.set_size_inches(9, 9)
-
-        #f.suptitle(title)
+        ax.tick_params(axis='both', labelsize=20)
 
         ax.set_xlim(0, 30)
         ax.set_ylim(-0.02, 1.02)
@@ -1336,8 +1376,10 @@ def plot_scrunch_distributions(model_scrunches, expt, expt_extrapolated,
         # Indicate where experiments cannot measure
         ax.axvspan(0, 1, ymin=0, ymax=1, facecolor='g', alpha=0.1)
 
-        f.savefig(os.path.join(fig_dir, filename))
+        figpath = os.path.join(fig_dir, filename)
+        f.savefig(figpath)
         plt.close(f)
+        print("Plot saved to {0}".format(figpath))
 
 
 def compare_scrunch_data(model, experiment, experiment_extrap):
@@ -1395,7 +1437,7 @@ def get_experiment_scrunch_distribution():
     return df_measurements, df_extrapolated
 
 
-def calc_scrunch_distribution(df, initial_RNAP):
+def calc_scrunch_distribution(df, cumul_probability):
     """
     Get distribution of time spent in abortive cycling before promoter escape
     """
@@ -1407,9 +1449,7 @@ def calc_scrunch_distribution(df, initial_RNAP):
     time = df.index[1:]
     escape_times = time[escapes == 1]
 
-    integrated_probability = np.linspace(1, 1 / float(initial_RNAP), initial_RNAP)
-
-    data = {'inverse_cumul_model': integrated_probability}
+    data = {'inverse_cumul_model': cumul_probability}
 
     scrunch_dist = pd.DataFrame(data=data, index=escape_times)
 
@@ -1761,9 +1801,10 @@ def fraction_scrunches_less_than_1_second_calc():
 
     fracs = []
 
+    cumul_probability = np.linspace(1, 1 / float(initial_RNAP), initial_RNAP)
     for r, sample_nr in zip(results, samples):
         ts = r.get()
-        model_scrunches = calc_scrunch_distribution(ts, initial_RNAP)
+        model_scrunches = calc_scrunch_distribution(ts, cumul_probability)
         up_to_one = model_scrunches[:1]
         if not up_to_one.empty:
             less_than_1_sec_frac = 1 - up_to_one.iloc[-1]
@@ -2264,7 +2305,7 @@ def ap_to_nac_examples():
 
     ax2.bar(x_values, backstep, align='center')
 
-    ax2.set_ylabel('Rate constant of backstepping (1/s)', size=22)
+    ax2.set_ylabel('Rate constant of backtracking (1/s)', size=22)
     ax2.set_xlabel('ITS position', size=22)
 
     for ax in [ax1, ax2]:
@@ -2498,7 +2539,7 @@ def scrunch_time_comparison():
     Using the obtained rate constants for plotting.
     """
 
-    params = (10.0, 1.2, 20)
+    params = (10.4, 1.3, 20)
     variant_name = 'N25'
     ITSs = data_handler.ReadData('dg100-new')
     its_variant = [i for i in ITSs if i.name == variant_name][0]
@@ -2506,17 +2547,29 @@ def scrunch_time_comparison():
     sim_end = 9000
 
     GreB = True
-
     stoi_setup = ITStoichiometricSetup(escape_RNA_length=14)
 
-    model_ts = get_timeseries(its_variant, initial_RNAP, stoi_setup, params, GreB, sim_end)
+    # One run with n=100 is a bit too unpredictable. Run several and show one
+    # standard deviation.
+    cumul_probability = np.linspace(1, 1 / float(initial_RNAP), initial_RNAP)
 
-    scrunch_dist = calc_scrunch_distribution(model_ts, initial_RNAP)
+    nr_sims = 100
+
+    ts = {}
+    for i in range(nr_sims):
+        model_ts = get_timeseries(its_variant, initial_RNAP, stoi_setup, params, GreB, sim_end)
+        scrunch_dist = calc_scrunch_distribution(model_ts, cumul_probability)
+
+        # Strictly, you should switch the index/data
+        ts[i] = scrunch_dist.index.values
+
+    model_runs = pd.DataFrame(index=cumul_probability, data=ts)
+
+    #fit, fit_extrap = compare_scrunch_data(scrunch_dist, experiment, extrapolated)
 
     experiment, extrapolated = get_experiment_scrunch_distribution()
-    fit, fit_extrap = compare_scrunch_data(scrunch_dist, experiment, extrapolated)
 
-    plot_scrunch_distributions(scrunch_dist, experiment, extrapolated, title='')
+    plot_scrunch_distributions(model_runs, experiment, extrapolated, title='')
 
 
 def get_timeseries(its_variant, initial_RNAP, stoi_setup, params, GreB,
@@ -2731,11 +2784,11 @@ def coarse_search_plot_correct_and_finegrain():
     df_fg['Abort'].plot(kind='hist', ax=axes[1, 1], subplots=True, bins=12,
                         normed=False, color=c)
 
-    axes[-1, -1].axis('off')
-
+    # Remove Y labels
+    #axes[-1, -1].axis('off')
     for ax in axes.flat:
         ax.set_ylabel('')
-        ax.set_yticklabels([])
+        #ax.set_yticklabels([])
 
     axes[0, 0].set_xlim(0, 26)
     axes[0, 1].set_xlim(0, 6)
@@ -2762,7 +2815,7 @@ def coarse_search_plot_correct_and_finegrain():
     topleft = axes[0, 0]
     botleft = axes[1, 0]
     add_letters([topleft, botleft], ('A', 'B'), ['UL', 'UL'], fontsize=14,
-                shiftX=-0.1, shiftY=0.03)
+                shiftX=-0.25, shiftY=0.03)
 
     fig.tight_layout()
 
@@ -2828,13 +2881,18 @@ def coarse_search_plot_tests_2_3():
     df2['Escape'].plot(kind='hist', ax=axes[1, 2], subplots=True, bins=20,
                        normed=False, color=c2, alpha=0.8, histtype=ht0)
 
+
     for ax in axes.flat:
         ax.set_ylabel('')
-        ax.set_yticklabels([])
+        #ax.set_yticklabels([])
         ax.set_xlim(0, 25)
 
         tickpos = [int(_) for _ in np.linspace(0, 25, 3)]
         ax.set_xticks(tickpos)
+
+        ymin, ymax = ax.get_ylim()
+        ymid = (ymin + ymax) / 2
+        ax.set_yticks([ymin, ymid, ymax])
 
     axes[0, 0].set_xlim(5, 25)
     axes[1, 0].set_xlim(5, 25)
@@ -2857,7 +2915,7 @@ def coarse_search_plot_tests_2_3():
     # a two-rows on this? Important figure.
     set_fig_size(fig, biochemistry_width * 2, 5.5)
 
-    add_letters([axes[0, 0], axes[1, 0]], shiftX=-0.1, shiftY=0, fontsize=12)
+    add_letters([axes[0, 0], axes[1, 0]], shiftX=-0.29, shiftY=0, fontsize=12)
 
     fig.tight_layout()
 
@@ -2969,7 +3027,7 @@ def kinetic_scheme(nac=9, uar=1.2, escape=20):
     rates['GreB_plus'] = [format(Rp.Backtrack(n), '.1f') for n in range(2, 12)]
     rates['GreB_minus'] = [format(Rm.Backtrack(n), '.1f') for n in range(2, 12)]
 
-    new_svg = kinetic_svg_edit(rates)
+    new_svg = kinetic_svg_edit(rates, nac, uar)
 
     ildir, ilname, ilext = getdirnamext(new_svg)
     new_pdf = os.path.join(ildir, ilname + '.pdf')
@@ -2987,7 +3045,7 @@ def getdirnamext(path):
     return dirname, filename, extension
 
 
-def kinetic_svg_edit(rates):
+def kinetic_svg_edit(rates, nac, uar):
     """
     Open template svg figure and insert appropriate rate constants.
     """
@@ -3026,11 +3084,11 @@ def kinetic_svg_edit(rates):
 
         # Update NAC-rc
         if 'NAC s' in line:
-            outline = line.replace('NAC s', '9 s')
+            outline = line.replace('NAC s', '{0} s'.format(nac))
             nac_found = True
 
         if 'UAR s' in line:
-            outline = line.replace('UAR s', '1.2 s')
+            outline = line.replace('UAR s', '{0} s'.format(uar))
             uar_found = True
 
         # Don't change line
@@ -3086,6 +3144,12 @@ def transcription_trajectories():
 
         #sum([[1,2], [1,2]]) does not work but sum[[1,2], [1,2], []) does. By
         #specifying the 'start' 'value' [] it's OK.
+        # XXX becaues it works like this:
+        #def sum(values, start = 0):
+            #total = start
+            #for value in values:
+                #total = total + value
+            #return total
         trajectories = sum(all_trajs, [])
 
         color = col[GreB]
@@ -3169,9 +3233,11 @@ def main():
     # Distributions
     #AP_and_pct_values_distributions_DG100()
 
-    # Coarse search with/withot GreB/extrapolated
+    # Coarse search with/without GreB/extrapolated
     #coarse_search()
     #coarse_search_plot_correct()  # GreB, not extrapolated
+
+    # XXX These are in the paper
     #coarse_search_plot_tests_2_3()    # Not GreB, and extrapolated
     #coarse_search_plot_correct_and_finegrain()  # both initial and finegrain search
 
@@ -3184,7 +3250,7 @@ def main():
     #ap_sensitivity_plot()
 
     # Plot of model vs measured vs extrapolated scrunch times
-    #scrunch_time_comparison()
+    scrunch_time_comparison()
 
     # Rerunning top 10 results to see variation in fitness
     #fitness_bound_calc()
@@ -3205,10 +3271,10 @@ def main():
     #ap_to_nac_examples()
 
     # kinetic scheme figure +/- GreB
-    #kinetic_scheme(nac=9, uar=1.2, escape=20)
+    #kinetic_scheme(nac=10.4, uar=1.3, escape=20)
 
     # GreB+/- trajectories
-    transcription_trajectories()
+    #transcription_trajectories()
 
     pass
 

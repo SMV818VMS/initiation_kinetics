@@ -95,9 +95,12 @@ class ITRates(object):
     def ToFL(self):
         """
         Aimed at Vo et al where there is a 50-15 = 35 nt stretch after
-        promoter escape until runoff.
+        promoter escape until runoff. This is an average of speeds for
+        positively and negatively supercoiled DNA.
+        Revyakin et al.: [(400-11)/42 + (400-11)/29] / 2
+
         """
-        return 10. / 35.
+        return 11.2 / 35.
 
     def Unscrunch(self):
         return self.unscrunch
